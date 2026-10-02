@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Brightness6
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
@@ -24,6 +25,8 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -38,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +54,9 @@ import com.videorotator.ui.theme.PurpleDark
 import com.videorotator.ui.theme.PurpleLight
 import com.videorotator.ui.theme.PurplePrimary
 import com.videorotator.ui.theme.White
+import com.videorotator.utils.PlayerPrefs
+
+private val PLAYBACK_SPEED_OPTIONS = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
 
 @Composable
 fun SettingsScreen(
@@ -58,8 +65,16 @@ fun SettingsScreen(
     onThemeColorChanged: (ThemeColor) -> Unit = {},
     onBackgroundModeChanged: (BackgroundMode) -> Unit = {}
 ) {
+    val context = LocalContext.current
     var notificationsEnabled by remember { mutableStateOf(true) }
     var autoScan by remember { mutableStateOf(true) }
+    var playbackSpeed by remember {
+        mutableStateOf(PlayerPrefs.getPlaybackSpeed(context))
+    }
+    var autoPlay by remember {
+        mutableStateOf(PlayerPrefs.getAutoPlay(context))
+    }
+    var speedMenuOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -134,17 +149,103 @@ fun SettingsScreen(
             title = "播放",
             description = "配置播放器行为"
         ) {
-            SettingsItem(
-                title = "默认倍速",
-                subtitle = "1.0x",
-                onClick = { }
-            )
+            // 默认倍速（点击整行展开下拉）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { speedMenuOpen = true }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "默认倍速",
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 15.sp,
+                        color = PurpleDark
+                    )
+                    Text(
+                        "打开播放器时使用的初始速度",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                }
+                Box {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${playbackSpeed}x",
+                            fontSize = 15.sp,
+                            color = PurplePrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            Icons.Filled.ExpandMore,
+                            contentDescription = "选择倍速",
+                            tint = PurplePrimary.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = speedMenuOpen,
+                        onDismissRequest = { speedMenuOpen = false }
+                    ) {
+                        PLAYBACK_SPEED_OPTIONS.forEach { speed ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "${speed}x",
+                                        fontWeight = if (speed == playbackSpeed) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (speed == playbackSpeed) PurplePrimary else PurpleDark
+                                    )
+                                },
+                                onClick = {
+                                    playbackSpeed = speed
+                                    PlayerPrefs.setPlaybackSpeed(context, speed)
+                                    speedMenuOpen = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
             Divider(color = PurpleLight)
-            SettingsItem(
-                title = "自动播放",
-                subtitle = "打开视频后自动播放",
-                onClick = { }
-            )
+            // 自动播放（开关）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "自动播放",
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 15.sp,
+                        color = PurpleDark
+                    )
+                    Text(
+                        if (autoPlay) "打开视频后立即播放" else "打开视频后手动点播放",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                }
+                Switch(
+                    checked = autoPlay,
+                    onCheckedChange = {
+                        autoPlay = it
+                        PlayerPrefs.setAutoPlay(context, it)
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = White,
+                        checkedTrackColor = PurplePrimary,
+                        uncheckedThumbColor = White,
+                        uncheckedTrackColor = PurpleLight
+                    )
+                )
+            }
         }
 
         // 通知设置

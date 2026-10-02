@@ -8,7 +8,9 @@ import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
+import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.nio.ByteBuffer
 
@@ -260,5 +262,73 @@ object VideoUtils {
     /** 默认扫描目录：用户设备的"下载"目录 */
     fun getDefaultVideoDirectory(): String {
         return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
+    }
+
+    /**
+     * 扫描 SAF treeUri 下（含子目录）的所有视频文件
+     */
+    fun scanVideosFromTreeUri(context: Context, treeUri: Uri): List<VideoInfo> {
+        val out = mutableListOf<VideoInfo>()
+        try {
+            val tree = DocumentFile.fromTreeUri(context, treeUri)
+            walkDocumentFile(context, tree, out)
+        } catch (e: Exception) {
+            // 权限异常等情况静默忽略
+        }
+        return out
+    }
+
+    /** 解析 treeUri 得到供 UI 显示的友好路径（primary:DCIM/sub2 形式） */
+    fun describeTreeUri(treeUri: Uri): String {
+        return try {
+            DocumentsContract.getTreeDocumentId(treeUri)
+        } catch (e: Exception) {
+            treeUri.lastPathSegment ?: treeUri.toString()
+        }
+    }
+
+    private fun walkDocumentFile(
+        context: Context,
+        file: DocumentFile?,
+        out: MutableList<VideoInfo>
+    ) {
+        if (file == null) return
+        if (file.isDirectory) {
+            file.listFiles().forEach { walkDocumentFile(context, it, out) }
+            return
+        }
+        if (!file.isFile) return
+        val mime = file.type ?: return
+        if (!mime.startsWith("video/")) return
+
+        try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(context, file.uri)
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: 0L
+            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                ?.toIntOrNull() ?: 0
+            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?.toIntOrNull() ?: 0
+            val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    ?.toIntOrNull() ?: 0
+            } else 0
+            retriever.release()
+            out.add(
+                VideoInfo(
+                    uri = file.uri,
+                    displayName = file.name ?: "未命名",
+                    duration = duration,
+                    width = width,
+                    height = height,
+                    size = file.length(),
+                    dateAdded = file.lastModified(),
+                    rotation = rotation
+                )
+            )
+        } catch (e: Exception) {
+            // 单个文件无法读取时跳过
+        }
     }
 }

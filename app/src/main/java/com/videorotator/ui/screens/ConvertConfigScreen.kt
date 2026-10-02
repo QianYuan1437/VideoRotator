@@ -33,6 +33,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,7 +56,11 @@ import com.videorotator.ui.theme.White
 import java.io.File
 
 @Composable
-fun ConvertConfigScreen() {
+fun ConvertConfigScreen(
+    pickedTreeUriDescription: String? = null,
+    onPickDirectory: () -> Unit = {},
+    onClearPickedDirectory: () -> Unit = {}
+) {
     var defaultOutputDir by remember {
         mutableStateOf(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES).absolutePath
@@ -88,18 +93,44 @@ fun ConvertConfigScreen() {
             description = "转换后视频的默认保存位置"
         ) {
             Surface(
+                onClick = onPickDirectory,
                 shape = RoundedCornerShape(12.dp),
                 color = PurpleLight,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    defaultOutputDir,
-                    fontSize = 13.sp,
-                    color = PurpleDark,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(12.dp)
-                )
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Folder,
+                        contentDescription = "选择文件夹",
+                        tint = PurplePrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            pickedTreeUriDescription ?: defaultOutputDir,
+                            fontSize = 13.sp,
+                            color = PurpleDark,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            if (pickedTreeUriDescription != null) "已通过系统选择器指定" else "点击选择其他文件夹",
+                            fontSize = 11.sp,
+                            color = PurplePrimary.copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                    if (pickedTreeUriDescription != null) {
+                        Spacer(Modifier.width(4.dp))
+                        TextButton(onClick = onClearPickedDirectory) {
+                            Text("清除", color = PurplePrimary, fontSize = 13.sp)
+                        }
+                    }
+                }
             }
         }
 

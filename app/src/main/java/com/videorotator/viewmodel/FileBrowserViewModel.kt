@@ -32,7 +32,8 @@ data class FileBrowserState(
     val sortKey: SortKey = SortKey.DATE_DESC,
     val isSelectMode: Boolean = false,
     val selectedUris: Set<String> = emptySet(),
-    val lastPlayedParent: String? = null
+    val lastPlayedParent: String? = null,
+    val pickedTreeUri: Uri? = null
 )
 
 class FileBrowserViewModel(application: Application) : AndroidViewModel(application) {
@@ -157,6 +158,45 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
         val target = _state.value.lastPlayedParent ?: return
         if (target != _state.value.currentDirectory) {
             setDirectory(target)
+        }
+    }
+
+    /**
+     * 用户在系统文件选择器里选了一个文件夹（SAF treeUri）。
+     * 清空 lastPlayedParent 提示，扫描该子树下的视频。
+     */
+    fun setPickedTreeUri(uri: Uri) {
+        _state.value = _state.value.copy(pickedTreeUri = uri)
+        loadVideosFromTreeUri(uri)
+    }
+
+    /** 清除已选的 SAF 目录，回到默认 MediaStore 扫描 */
+    fun clearPickedTreeUri() {
+        _state.value = _state.value.copy(pickedTreeUri = null, currentDirectory = VideoUtils.getDefaultVideoDirectory())
+        loadVideos()
+    }
+
+    private fun loadVideosFromTreeUri(uri: Uri) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isLoading = true, errorMessage = null)
+            try {
+                val context = getApplication<Application>()
+                val displayPath = VideoUtils.describeTreeUri(uri)
+                val videos = withContext(Dispatchers.IO) {
+                    VideoUtils.scanVideosFromTreeUri(context, uri)
+                }
+                rawVideos = videos
+                applySort()
+                _state.value = _state.value.copy(
+                    isLoading = false,
+                    currentDirectory = displayPath
+                )
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    isLoading = false,
+                    errorMessage = e.message ?: "加载失败"
+                )
+            }
         }
     }
 }

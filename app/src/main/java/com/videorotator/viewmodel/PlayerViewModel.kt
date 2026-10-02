@@ -8,6 +8,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.videorotator.utils.PlayerPrefs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,10 +41,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun initializePlayer(uri: Uri) {
         releasePlayer()
         val context = getApplication<Application>()
+        val speed = PlayerPrefs.getPlaybackSpeed(context)
+        val autoPlay = PlayerPrefs.getAutoPlay(context)
         player = ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(uri))
             prepare()
-            playWhenReady = true
+            playWhenReady = autoPlay
+            playbackParameters = PlaybackParameters(speed)
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_READY) {
@@ -56,6 +60,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 }
             })
         }
+        // 同步应用到 UI 状态（覆盖默认 1.0f / 初始 isPlaying 推断）
+        _state.value = _state.value.copy(playbackSpeed = speed)
         startPositionUpdates()
     }
 

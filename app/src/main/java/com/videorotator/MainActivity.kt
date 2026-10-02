@@ -1,6 +1,8 @@
 package com.videorotator
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -69,6 +71,27 @@ class MainActivity : ComponentActivity() {
     private var themeColorIndex by mutableStateOf(0)
     private var backgroundMode by mutableStateOf(BackgroundMode.LIGHT)
 
+    // 系统文件夹选择器选中的目录（SAF treeUri）
+    private var pickedTreeUri by mutableStateOf<Uri?>(null)
+
+    /** 系统 SAF 文件夹选择器 */
+    private val pickDirectoryLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (_: SecurityException) {
+                // 部分目录不支持持久化权限，忽略
+            }
+            pickedTreeUri = uri
+            fileBrowserViewModel?.setPickedTreeUri(uri)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -99,6 +122,10 @@ class MainActivity : ComponentActivity() {
                         fbViewModel = fbViewModel,
                         currentThemeColor = themeColors.getOrElse(themeColorIndex) { themeColors[0] },
                         currentBackgroundMode = backgroundMode,
+                        pickedTreeUri = pickedTreeUri,
+                        pickedTreeUriDescription = pickedTreeUri?.let {
+                            com.videorotator.utils.VideoUtils.describeTreeUri(it)
+                        },
                         onThemeColorChanged = { color ->
                             themeColorIndex = themeColors.indexOf(color).coerceAtLeast(0)
                             prefs.edit().putInt("theme_color_index", themeColorIndex).apply()
@@ -106,6 +133,11 @@ class MainActivity : ComponentActivity() {
                         onBackgroundModeChanged = { mode ->
                             backgroundMode = mode
                             prefs.edit().putInt("background_mode", mode.ordinal).apply()
+                        },
+                        onPickDirectory = { pickDirectoryLauncher.launch(null) },
+                        onClearPickedDirectory = {
+                            pickedTreeUri = null
+                            fileBrowserViewModel?.clearPickedTreeUri()
                         }
                     )
                 }
@@ -124,8 +156,12 @@ fun MainScreen(
     fbViewModel: FileBrowserViewModel,
     currentThemeColor: com.videorotator.ui.components.ThemeColor,
     currentBackgroundMode: BackgroundMode,
+    pickedTreeUri: Uri?,
+    pickedTreeUriDescription: String?,
     onThemeColorChanged: (com.videorotator.ui.components.ThemeColor) -> Unit,
-    onBackgroundModeChanged: (BackgroundMode) -> Unit
+    onBackgroundModeChanged: (BackgroundMode) -> Unit,
+    onPickDirectory: () -> Unit,
+    onClearPickedDirectory: () -> Unit
 ) {
     val tabs = listOf(
         TabItem("视频列表", Icons.Filled.Movie),
@@ -218,6 +254,8 @@ fun MainScreen(
                     0 -> FileBrowserTab(
                         fbViewModel = fbViewModel,
                         convertViewModel = convertViewModel,
+                        pickedTreeUri = pickedTreeUri,
+                        onPickDirectory = onPickDirectory,
                         onVideoClick = { video ->
                             // 记住该视频所在的目录（路径栏点击可跳回）
                             fbViewModel.rememberPlayedVideo(video.uri)
@@ -225,7 +263,11 @@ fun MainScreen(
                         }
                     )
                     1 -> ConvertListTab(convertViewModel)
-                    2 -> ConvertConfigTab()
+                    2 -> ConvertConfigTab(
+                        pickedTreeUriDescription = pickedTreeUriDescription,
+                        onPickDirectory = onPickDirectory,
+                        onClearPickedDirectory = onClearPickedDirectory
+                    )
                     3 -> SettingsTab(
                         currentThemeColor = currentThemeColor,
                         currentBackgroundMode = currentBackgroundMode,
@@ -242,6 +284,8 @@ fun MainScreen(
 fun FileBrowserTab(
     fbViewModel: FileBrowserViewModel,
     convertViewModel: ConvertViewModel,
+    pickedTreeUri: Uri?,
+    onPickDirectory: () -> Unit,
     onVideoClick: (VideoInfo) -> Unit
 ) {
     val state by fbViewModel.state.collectAsState()
@@ -269,13 +313,22 @@ fun FileBrowserTab(
                 fbViewModel.exitSelectMode()
             }
         },
-        onJumpToLastPlayed = { fbViewModel.jumpToLastPlayedParent() }
+        onJumpToLastPlayed = { fbViewModel.jumpToLastPlayedParent() },
+        onPickDirectory = onPickDirectory
     )
 }
 
 @Composable
-fun ConvertConfigTab() {
-    ConvertConfigScreen()
+fun ConvertConfigTab(
+    pickedTreeUriDescription: String?,
+    onPickDirectory: () -> Unit,
+    onClearPickedDirectory: () -> Unit
+) {
+    ConvertConfigScreen(
+        pickedTreeUriDescription = pickedTreeUriDescription,
+        onPickDirectory = onPickDirectory,
+        onClearPickedDirectory = onClearPickedDirectory
+    )
 }
 
 @Composable

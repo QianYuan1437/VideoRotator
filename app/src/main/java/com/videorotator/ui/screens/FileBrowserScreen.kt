@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SdStorage
@@ -93,6 +94,7 @@ fun FileBrowserScreen(
     onExitSelectMode: () -> Unit,
     onBatchConvert: () -> Unit,
     onJumpToLastPlayed: () -> Unit,
+    onPickDirectory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -102,11 +104,13 @@ fun FileBrowserScreen(
     ) {
         QuickDirectoryBar(
             currentDir = state.currentDirectory,
+            isPickedDir = state.pickedTreeUri != null,
             lastPlayedParent = state.lastPlayedParent,
             onJumpToLastPlayed = onJumpToLastPlayed,
             onNavigateToParent = onNavigateToParent,
             onNavigateToDirectory = onNavigateToDirectory,
             onRefresh = onRefresh,
+            onPickDirectory = onPickDirectory,
             sortKey = state.sortKey,
             onSortKeySelected = onSortKeySelected,
             isSelectMode = state.isSelectMode,
@@ -163,11 +167,13 @@ fun FileBrowserScreen(
 @Composable
 private fun QuickDirectoryBar(
     currentDir: String,
+    isPickedDir: Boolean,
     lastPlayedParent: String?,
     onJumpToLastPlayed: () -> Unit,
     onNavigateToParent: () -> Unit,
     onNavigateToDirectory: (String) -> Unit,
     onRefresh: () -> Unit,
+    onPickDirectory: () -> Unit,
     sortKey: SortKey,
     onSortKeySelected: (SortKey) -> Unit,
     isSelectMode: Boolean,
@@ -190,12 +196,23 @@ private fun QuickDirectoryBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // 当前路径 + 跳转到上次播放文件目录的入口
+                // 当前路径 + 跳转到上次播放文件目录的入口；整行点击唤起系统文件夹选择器
                 val canJump = lastPlayedParent != null && lastPlayedParent != currentDir
                 Row(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onPickDirectory)
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Icon(
+                        Icons.Filled.Home,
+                        contentDescription = "选择文件夹",
+                        tint = PurplePrimary.copy(alpha = 0.7f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
                     Text(
                         currentDir,
                         fontSize = 13.sp,
@@ -204,6 +221,21 @@ private fun QuickDirectoryBar(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
+                    if (isPickedDir) {
+                        Spacer(Modifier.width(4.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = PurplePrimary.copy(alpha = 0.18f)
+                        ) {
+                            Text(
+                                "已选",
+                                fontSize = 10.sp,
+                                color = PurplePrimary,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
                     if (canJump) {
                         Spacer(Modifier.width(4.dp))
                         TextButton(
