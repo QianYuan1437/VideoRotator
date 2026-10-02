@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VideoRotator 视频旋转助手 - 功能与开发说明</title>
+<style>
+  :root{
+    --primary:#7E57C2; --primary-light:#B39DDB; --primary-dark:#5E35B1;
+    --bg:#F8F4FC; --card:#FFFFFF; --text:#2D2B3A; --muted:#6E6A80;
+    --radius-card:20px; --radius-box:16px; --radius-chip:12px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.7;}
+  a{color:var(--primary);text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  .container{max-width:1080px;margin:0 auto;padding:0 24px;}
+
+  header{background:linear-gradient(135deg,var(--primary-dark),var(--primary-light));color:#fff;padding:72px 0 64px;border-radius:0 0 32px 32px;}
+  .nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:48px;}
+  .nav .logo{font-weight:700;font-size:18px;}
+  .nav .links a{color:#fff;margin-left:20px;font-size:14px;opacity:.92;}
+  .hero h1{font-size:44px;font-weight:800;margin-bottom:16px;}
+  .hero p{font-size:18px;opacity:.94;max-width:720px;margin-bottom:32px;}
+  .btns{display:flex;gap:14px;flex-wrap:wrap;}
+  .btn{display:inline-block;padding:13px 28px;border-radius:var(--radius-box);font-weight:600;font-size:15px;transition:.2s;}
+  .btn:hover{text-decoration:none;transform:translateY(-2px);}
+  .btn-white{background:#fff;color:var(--primary-dark);}
+  .btn-outline{border:2px solid rgba(255,255,255,.75);color:#fff;}
+
+  section{padding:56px 0;}
+  h2{font-size:30px;font-weight:800;margin-bottom:8px;}
+  .sub{color:var(--muted);margin-bottom:36px;font-size:15px;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;}
+  .card{background:var(--card);border-radius:var(--radius-card);padding:26px;box-shadow:0 4px 16px rgba(94,53,177,.07);}
+  .card .icon{width:46px;height:46px;border-radius:var(--radius-chip);background:#EDE7F6;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:14px;}
+  .card h3{font-size:17px;font-weight:700;margin-bottom:8px;}
+  .card p{font-size:14px;color:var(--muted);}
+  .chip{display:inline-block;background:#EDE7F6;color:var(--primary-dark);border-radius:var(--radius-chip);padding:3px 12px;font-size:13px;font-weight:600;margin:4px 6px 0 0;}
+
+  .swatches{display:flex;flex-wrap:wrap;gap:14px;}
+  .swatch{width:112px;text-align:center;}
+  .swatch .box{height:56px;border-radius:var(--radius-chip);border:1px solid rgba(0,0,0,.08);margin-bottom:6px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;}
+  .swatch span{font-size:13px;color:var(--muted);}
+
+  .steps{counter-reset:step;display:grid;gap:16px;}
+  .step{background:var(--card);border-radius:var(--radius-box);padding:20px 24px 20px 66px;position:relative;box-shadow:0 3px 12px rgba(94,53,177,.06);}
+  .step::before{counter-increment:step;content:counter(step);position:absolute;left:20px;top:18px;width:32px;height:32px;border-radius:50%;background:var(--primary);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .step h4{font-size:15px;margin-bottom:4px;}
+  .step p{font-size:14px;color:var(--muted);}
+  code{background:#EDE7F6;color:var(--primary-dark);border-radius:6px;padding:2px 8px;font-family:Consolas,Menlo,monospace;font-size:13px;}
+
+  table{width:100%;border-collapse:collapse;background:var(--card);border-radius:var(--radius-card);overflow:hidden;box-shadow:0 4px 16px rgba(94,53,177,.07);}
+  th,td{text-align:left;padding:13px 18px;font-size:14px;border-bottom:1px solid #F0EBF7;}
+  th{background:#EDE7F6;color:var(--primary-dark);font-weight:700;}
+  tr:last-child td{border-bottom:none;}
+
+  footer{background:var(--primary-dark);color:rgba(255,255,255,.85);padding:36px 0;border-radius:32px 32px 0 0;margin-top:40px;font-size:14px;text-align:center;}
+  footer a{color:#D1C4E9;}
+  @media(max-width:640px){.hero h1{font-size:32px;} .nav .links{display:none;}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="nav">
+      <div class="logo">🎬 VideoRotator</div>
+      <div class="links">
+        <a href="#features">功能特性</a>
+        <a href="#design">设计语言</a>
+        <a href="#dev">开发说明</a>
+        <a href="./en/index.html">English</a>
+        <a href="https://github.com/QianYuan1437/VideoRotator">GitHub</a>
+      </div>
+    </div>
+    <div class="hero">
+      <h1>VideoRotator 视频旋转助手</h1>
+      <p>将横屏视频旋转 90° 转为竖屏 —— 纯元数据旋转、不裁切、不重编码，秒级完成、画质无损。内置 Bilibili 风格播放器与浅紫色圆润设计语言。</p>
+      <div class="btns">
+        <a class="btn btn-white" href="https://github.com/QianYuan1437/VideoRotator/releases">⬇ 下载 APK</a>
+        <a class="btn btn-outline" href="https://github.com/QianYuan1437/VideoRotator">查看源码</a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="container">
+    <h2>功能特性</h2>
+    <p class="sub">从转换到播放的完整闭环</p>
+    <div class="grid">
+      <div class="card">
+        <div class="icon">🔄</div>
+        <h3>横屏转竖屏 · 无损旋转</h3>
+        <p>基于 MediaExtractor + MediaMuxer 的 <code>setOrientationHint</code> 修改方向元数据，不重新编码：不裁切画面、不损失画质、转换在数秒内完成，支持顺时针 / 逆时针 90°。</p>
+      </div>
+      <div class="card">
+        <div class="icon">📺</div>
+        <h3>Bilibili 风格播放器</h3>
+        <p>倍速播放 0.5x–2.0x；左侧上下滑动调节亮度、右侧调节音量；上下滑动拖动进度；视角锁定防误触；全屏切换；双击播放 / 暂停；控制栏 3 秒自动隐藏。</p>
+      </div>
+      <div class="card">
+        <div class="icon">📁</div>
+        <h3>保存路径可选</h3>
+        <p>转换后的视频可保存到应用私有目录、Movies、DCIM、Download，或输入任意自定义路径；浏览页支持按目录浏览设备上的视频文件。</p>
+      </div>
+      <div class="card">
+        <div class="icon">🎨</div>
+        <h3>主题色 · 背景色可选</h3>
+        <p>两行共 8 套主题色块，点选即显示配色名称并自动应用；背景支持浅色 / 深色 / 跟随系统三种模式，所有选择持久化保存，重启不丢失。</p>
+      </div>
+      <div class="card">
+        <div class="icon">🧭</div>
+        <h3>三 Tab 底部导航</h3>
+        <p>视频列表、转换配置、相关设置三个标签页；底部导航栏底部 28dp 圆角并预留系统手势栏内边距，正确适配圆角屏幕底边。</p>
+      </div>
+      <div class="card">
+        <div class="icon">⚙️</div>
+        <h3>转换配置中心</h3>
+        <p>输出目录、旋转方向、保留原始文件、高质量模式等开关集中管理；转换过程带进度条与成功反馈，一键打开所在文件夹。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="design">
+  <div class="container">
+    <h2>设计语言</h2>
+    <p class="sub">规范 · 圆润 · 浅紫色主色</p>
+    <div class="card" style="margin-bottom:24px;">
+      <h3 style="margin-bottom:16px;">8 套主题色（点选切换）</h3>
+      <div class="swatches">
+        <div class="swatch"><div class="box" style="background:#B39DDB;">✓</div><span>浅紫色</span></div>
+        <div class="swatch"><div class="box" style="background:#F48FB1;">·</div><span>樱花粉</span></div>
+        <div class="swatch"><div class="box" style="background:#90CAF9;">·</div><span>天空蓝</span></div>
+        <div class="swatch"><div class="box" style="background:#80CBC4;">·</div><span>薄荷绿</span></div>
+        <div class="swatch"><div class="box" style="background:#FFCC80;">·</div><span>活力橙</span></div>
+        <div class="swatch"><div class="box" style="background:#E57373;">·</div><span>玫瑰红</span></div>
+        <div class="swatch"><div class="box" style="background:#FFF59D;">·</div><span>柠檬黄</span></div>
+        <div class="swatch"><div class="box" style="background:#B0BEC5;">·</div><span>石墨灰</span></div>
+      </div>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <h3>统一圆角规范</h3>
+        <p>
+          <span class="chip">卡片 / 弹窗 / 按钮 20dp</span>
+          <span class="chip">选择框 / 输入框 16dp</span>
+          <span class="chip">标签 / 图标容器 12dp</span>
+          <span class="chip">底部导航 28dp 圆角底边</span>
+          全部选择框、按钮、卡片遵循同一圆角体系，视觉一致。
+        </p>
+      </div>
+      <div class="card">
+        <h3>浅紫色主色体系</h3>
+        <p>默认主色 #B39DDB，强调色 #7E57C2，深色文字 #5E35B1，背景 #F8F4FC；深色模式自动切换为深紫底 + 浅紫文字，跟随系统可无缝切换。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="dev">
+  <div class="container">
+    <h2>开发说明</h2>
+    <p class="sub">技术栈、目录结构与构建流程</p>
+
+    <table style="margin-bottom:32px;">
+      <tr><th>模块</th><th>选型</th></tr>
+      <tr><td>语言</td><td>Kotlin 1.9.22</td></tr>
+      <tr><td>UI 框架</td><td>Jetpack Compose + Material 3（Compose BOM 2023.10.01）</td></tr>
+      <tr><td>播放器</td><td>Media3 ExoPlayer 1.2.1</td></tr>
+      <tr><td>视频旋转</td><td>MediaExtractor + MediaMuxer（setOrientationHint 元数据旋转）</td></tr>
+      <tr><td>缩略图 / 协程</td><td>Coil 2.5.0 / kotlinx-coroutines 1.7.3</td></tr>
+      <tr><td>构建工具</td><td>Gradle 7.6.3 · AGP 7.4.2 · JDK 17 · compileSdk 34 / minSdk 24</td></tr>
+    </table>
+
+    <h3 style="margin-bottom:16px;">项目结构</h3>
+    <div class="step" style="margin-bottom:16px;padding-left:24px;">
+      <p><code>app/src/main/java/com/videorotator/</code></p>
+      <p><code>MainActivity.kt</code> — 三 Tab 导航骨架 · <code>ui/components/</code> — 播放器与主题选择器 · <code>ui/screens/</code> — 功能页面 · <code>viewmodel/</code> — 状态管理 · <code>utils/</code> — 视频扫描与旋转转换</p>
+    </div>
+
+    <h3 style="margin-bottom:16px;">本地构建</h3>
+    <div class="steps">
+      <div class="step">
+        <h4>准备环境</h4>
+        <p>安装 JDK 17 与 Android SDK，在 <code>local.properties</code> 中配置 <code>sdk.dir</code>。</p>
+      </div>
+      <div class="step">
+        <h4>构建 Debug 包</h4>
+        <p><code>./gradlew assembleDebug</code>，产物位于 <code>app/build/outputs/apk/debug/app-debug.apk</code>。</p>
+      </div>
+      <div class="step">
+        <h4>安装调试</h4>
+        <p><code>adb install -r app-debug.apk</code>，或直接在模拟器 / 真机上打开应用测试旋转与播放。</p>
+      </div>
+    </div>
+
+    <h3 style="margin:32px 0 16px;">CI/CD（GitHub Actions）</h3>
+    <div class="grid">
+      <div class="card">
+        <div class="icon">🚀</div>
+        <h3>Build &amp; Release</h3>
+        <p>推送 <code>main</code> 分支 → 自动构建 APK 并更新 <code>latest</code> 预发布；推送 <code>v*</code> 标签 → 自动创建正式 Release 并附带可安装 APK。Release 地址：<a href="https://github.com/QianYuan1437/VideoRotator/releases">Releases</a></p>
+      </div>
+      <div class="card">
+        <div class="icon">📄</div>
+        <h3>Deploy Docs</h3>
+        <p><code>docs/</code> 目录发生变更时自动部署本中英文说明网页到 GitHub Pages，每次提交即可在线更新文档。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>VideoRotator · 视频旋转助手 —— 基于 Kotlin + Jetpack Compose 构建</p>
+    <p style="margin-top:6px;">
+      <a href="https://github.com/QianYuan1437/VideoRotator">GitHub</a> ·
+      <a href="https://github.com/QianYuan1437/VideoRotator/releases">Releases</a> ·
+      <a href="./en/index.html">English</a> ·
+      MIT License
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

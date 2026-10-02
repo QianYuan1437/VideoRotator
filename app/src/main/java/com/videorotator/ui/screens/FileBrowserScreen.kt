@@ -1,0 +1,338 @@
+package com.videorotator.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SdStorage
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.videorotator.ui.theme.PurpleBg
+import com.videorotator.ui.theme.PurpleDark
+import com.videorotator.ui.theme.PurpleLight
+import com.videorotator.ui.theme.PurplePrimary
+import com.videorotator.ui.theme.White
+import com.videorotator.utils.VideoInfo
+import com.videorotator.viewmodel.FileBrowserState
+
+@Composable
+fun FileBrowserScreen(
+    state: FileBrowserState,
+    onVideoClick: (VideoInfo) -> Unit,
+    onRefresh: () -> Unit,
+    onNavigateToParent: () -> Unit,
+    onNavigateToDirectory: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(PurpleBg)
+    ) {
+        // 快捷目录栏
+        QuickDirectoryBar(
+            currentDir = state.currentDirectory,
+            onNavigateToParent = onNavigateToParent,
+            onNavigateToDirectory = onNavigateToDirectory,
+            onRefresh = onRefresh
+        )
+
+        if (state.isLoading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = PurplePrimary)
+            }
+        } else if (state.videos.isEmpty()) {
+            EmptyState(onRefresh = onRefresh)
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(state.videos, key = { it.uri.toString() }) { video ->
+                    VideoCard(
+                        video = video,
+                        onClick = { onVideoClick(video) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickDirectoryBar(
+    currentDir: String,
+    onNavigateToParent: () -> Unit,
+    onNavigateToDirectory: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    Surface(
+        color = White,
+        shadowElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    currentDir,
+                    fontSize = 13.sp,
+                    color = PurpleDark,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onRefresh) {
+                    Icon(Icons.Filled.Refresh, "刷新", tint = PurpleDark)
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = PurpleLight,
+                    modifier = Modifier.clickable { onNavigateToParent() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Filled.SdStorage, null, tint = PurpleDark, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("上级", fontSize = 13.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = PurpleLight,
+                    modifier = Modifier.clickable {
+                        onNavigateToDirectory("/storage/emulated/0/Movies")
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Filled.Movie, null, tint = PurpleDark, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Movies", fontSize = 13.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = PurpleLight,
+                    modifier = Modifier.clickable {
+                        onNavigateToDirectory("/storage/emulated/0/DCIM")
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Filled.Folder, null, tint = PurpleDark, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("DCIM", fontSize = 13.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoCard(
+    video: VideoInfo,
+    onClick: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 缩略图
+            Box(
+                modifier = Modifier
+                    .size(100.dp, 70.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(PurpleLight),
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(video.uri)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Icon(
+                    Icons.Filled.Movie,
+                    null,
+                    tint = PurplePrimary.copy(alpha = 0.5f),
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+
+            Spacer(Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = video.displayName,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = PurpleLight
+                    ) {
+                        Text(
+                            video.durationText,
+                            fontSize = 12.sp,
+                            color = PurpleDark,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = PurpleLight
+                    ) {
+                        Text(
+                            video.resolution,
+                            fontSize = 12.sp,
+                            color = PurpleDark,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                    if (video.isLandscape) {
+                        Spacer(Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = PurplePrimary.copy(alpha = 0.2f)
+                        ) {
+                            Text(
+                                "横屏",
+                                fontSize = 12.sp,
+                                color = PurpleDark,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    video.sizeText,
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyState(onRefresh: () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Filled.Storage,
+                null,
+                tint = PurplePrimary.copy(alpha = 0.4f),
+                modifier = Modifier.size(80.dp)
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "未找到视频文件",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color.Gray
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "请确认目录中包含视频文件",
+                fontSize = 14.sp,
+                color = Color.Gray.copy(alpha = 0.7f)
+            )
+            Spacer(Modifier.height(24.dp))
+            Button(
+                onClick = onRefresh,
+                colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Icon(Icons.Filled.Refresh, null, tint = White)
+                Spacer(Modifier.width(8.dp))
+                Text("刷新", color = White)
+            }
+        }
+    }
+}

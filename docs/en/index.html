@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VideoRotator - Features &amp; Development Guide</title>
+<style>
+  :root{
+    --primary:#7E57C2; --primary-light:#B39DDB; --primary-dark:#5E35B1;
+    --bg:#F8F4FC; --card:#FFFFFF; --text:#2D2B3A; --muted:#6E6A80;
+    --radius-card:20px; --radius-box:16px; --radius-chip:12px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:"Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.7;}
+  a{color:var(--primary);text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  .container{max-width:1080px;margin:0 auto;padding:0 24px;}
+
+  header{background:linear-gradient(135deg,var(--primary-dark),var(--primary-light));color:#fff;padding:72px 0 64px;border-radius:0 0 32px 32px;}
+  .nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:48px;}
+  .nav .logo{font-weight:700;font-size:18px;}
+  .nav .links a{color:#fff;margin-left:20px;font-size:14px;opacity:.92;}
+  .hero h1{font-size:44px;font-weight:800;margin-bottom:16px;}
+  .hero p{font-size:18px;opacity:.94;max-width:720px;margin-bottom:32px;}
+  .btns{display:flex;gap:14px;flex-wrap:wrap;}
+  .btn{display:inline-block;padding:13px 28px;border-radius:var(--radius-box);font-weight:600;font-size:15px;transition:.2s;}
+  .btn:hover{text-decoration:none;transform:translateY(-2px);}
+  .btn-white{background:#fff;color:var(--primary-dark);}
+  .btn-outline{border:2px solid rgba(255,255,255,.75);color:#fff;}
+
+  section{padding:56px 0;}
+  h2{font-size:30px;font-weight:800;margin-bottom:8px;}
+  .sub{color:var(--muted);margin-bottom:36px;font-size:15px;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;}
+  .card{background:var(--card);border-radius:var(--radius-card);padding:26px;box-shadow:0 4px 16px rgba(94,53,177,.07);}
+  .card .icon{width:46px;height:46px;border-radius:var(--radius-chip);background:#EDE7F6;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:14px;}
+  .card h3{font-size:17px;font-weight:700;margin-bottom:8px;}
+  .card p{font-size:14px;color:var(--muted);}
+  .chip{display:inline-block;background:#EDE7F6;color:var(--primary-dark);border-radius:var(--radius-chip);padding:3px 12px;font-size:13px;font-weight:600;margin:4px 6px 0 0;}
+
+  .swatches{display:flex;flex-wrap:wrap;gap:14px;}
+  .swatch{width:112px;text-align:center;}
+  .swatch .box{height:56px;border-radius:var(--radius-chip);border:1px solid rgba(0,0,0,.08);margin-bottom:6px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;}
+  .swatch span{font-size:13px;color:var(--muted);}
+
+  .steps{counter-reset:step;display:grid;gap:16px;}
+  .step{background:var(--card);border-radius:var(--radius-box);padding:20px 24px 20px 66px;position:relative;box-shadow:0 3px 12px rgba(94,53,177,.06);}
+  .step::before{counter-increment:step;content:counter(step);position:absolute;left:20px;top:18px;width:32px;height:32px;border-radius:50%;background:var(--primary);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .step h4{font-size:15px;margin-bottom:4px;}
+  .step p{font-size:14px;color:var(--muted);}
+  code{background:#EDE7F6;color:var(--primary-dark);border-radius:6px;padding:2px 8px;font-family:Consolas,Menlo,monospace;font-size:13px;}
+
+  table{width:100%;border-collapse:collapse;background:var(--card);border-radius:var(--radius-card);overflow:hidden;box-shadow:0 4px 16px rgba(94,53,177,.07);}
+  th,td{text-align:left;padding:13px 18px;font-size:14px;border-bottom:1px solid #F0EBF7;}
+  th{background:#EDE7F6;color:var(--primary-dark);font-weight:700;}
+  tr:last-child td{border-bottom:none;}
+
+  footer{background:var(--primary-dark);color:rgba(255,255,255,.85);padding:36px 0;border-radius:32px 32px 0 0;margin-top:40px;font-size:14px;text-align:center;}
+  footer a{color:#D1C4E9;}
+  @media(max-width:640px){.hero h1{font-size:32px;} .nav .links{display:none;}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="nav">
+      <div class="logo">🎬 VideoRotator</div>
+      <div class="links">
+        <a href="#features">Features</a>
+        <a href="#design">Design</a>
+        <a href="#dev">Development</a>
+        <a href="../../index.html">中文</a>
+        <a href="https://github.com/QianYuan1437/VideoRotator">GitHub</a>
+      </div>
+    </div>
+    <div class="hero">
+      <h1>VideoRotator</h1>
+      <p>Rotate landscape videos 90° into portrait — metadata-only rotation with no cropping and no re-encoding. Completes in seconds with lossless quality. Ships with a Bilibili-style player and a rounded light-purple design language.</p>
+      <div class="btns">
+        <a class="btn btn-white" href="https://github.com/QianYuan1437/VideoRotator/releases">⬇ Download APK</a>
+        <a class="btn btn-outline" href="https://github.com/QianYuan1437/VideoRotator">Source Code</a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="container">
+    <h2>Features</h2>
+    <p class="sub">A complete loop from conversion to playback</p>
+    <div class="grid">
+      <div class="card">
+        <div class="icon">🔄</div>
+        <h3>Landscape → Portrait, Lossless</h3>
+        <p>Uses <code>setOrientationHint</code> with MediaExtractor + MediaMuxer to change orientation metadata — no re-encoding, no cropping, no quality loss. Finishes in seconds. Clockwise or counter-clockwise 90°.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📺</div>
+        <h3>Bilibili-style Player</h3>
+        <p>Playback speed 0.5x–2.0x; drag the left edge for brightness, the right edge for volume; swipe vertically to seek; orientation lock against accidental touches; fullscreen toggle; double-tap play/pause; controls auto-hide after 3 seconds.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📁</div>
+        <h3>Selectable Save Path</h3>
+        <p>Save converted videos to the app-private folder, Movies, DCIM, Download, or any custom path. The browse tab lets you navigate video files by directory.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🎨</div>
+        <h3>Theme &amp; Background Colors</h3>
+        <p>Eight theme swatches in two rows — tap one to see its name applied instantly. Background supports Light / Dark / Follow system. All choices are persisted and survive restarts.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🧭</div>
+        <h3>Three-Tab Bottom Navigation</h3>
+        <p>Video List, Conversion Config, Settings. The bottom navigation bar has 28dp rounded bottom corners with system gesture-bar insets, correctly adapting to rounded screen edges.</p>
+      </div>
+      <div class="card">
+        <div class="icon">⚙️</div>
+        <h3>Conversion Config Center</h3>
+        <p>Output directory, rotation direction, keep-original and high-quality switches in one place. Progress bar during conversion, success feedback, and a one-tap “open containing folder”.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="design">
+  <div class="container">
+    <h2>Design Language</h2>
+    <p class="sub">Consistent · Rounded · Light-purple primary</p>
+    <div class="card" style="margin-bottom:24px;">
+      <h3 style="margin-bottom:16px;">8 Theme Colors (tap to switch)</h3>
+      <div class="swatches">
+        <div class="swatch"><div class="box" style="background:#B39DDB;">✓</div><span>Light Purple</span></div>
+        <div class="swatch"><div class="box" style="background:#F48FB1;">·</div><span>Sakura Pink</span></div>
+        <div class="swatch"><div class="box" style="background:#90CAF9;">·</div><span>Sky Blue</span></div>
+        <div class="swatch"><div class="box" style="background:#80CBC4;">·</div><span>Mint Green</span></div>
+        <div class="swatch"><div class="box" style="background:#FFCC80;">·</div><span>Vibrant Orange</span></div>
+        <div class="swatch"><div class="box" style="background:#E57373;">·</div><span>Rose Red</span></div>
+        <div class="swatch"><div class="box" style="background:#FFF59D;">·</div><span>Lemon Yellow</span></div>
+        <div class="swatch"><div class="box" style="background:#B0BEC5;">·</div><span>Graphite Gray</span></div>
+      </div>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <h3>Unified Corner Radius</h3>
+        <p>
+          <span class="chip">Cards / dialogs / buttons 20dp</span>
+          <span class="chip">Selection boxes / inputs 16dp</span>
+          <span class="chip">Chips / icon containers 12dp</span>
+          <span class="chip">Bottom nav 28dp bottom corners</span>
+          Every selection box, button and card follows the same radius system for visual consistency.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Light-Purple Palette</h3>
+        <p>Primary #B39DDB, accent #7E57C2, dark text #5E35B1, background #F8F4FC. Dark mode automatically switches to a deep-purple background with light-purple text, and Follow-system transitions seamlessly.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="dev">
+  <div class="container">
+    <h2>Development Guide</h2>
+    <p class="sub">Tech stack, project structure and build pipeline</p>
+
+    <table style="margin-bottom:32px;">
+      <tr><th>Module</th><th>Choice</th></tr>
+      <tr><td>Language</td><td>Kotlin 1.9.22</td></tr>
+      <tr><td>UI</td><td>Jetpack Compose + Material 3 (Compose BOM 2023.10.01)</td></tr>
+      <tr><td>Player</td><td>Media3 ExoPlayer 1.2.1</td></tr>
+      <tr><td>Rotation</td><td>MediaExtractor + MediaMuxer (setOrientationHint metadata rotation)</td></tr>
+      <tr><td>Thumbnails / Coroutines</td><td>Coil 2.5.0 / kotlinx-coroutines 1.7.3</td></tr>
+      <tr><td>Build</td><td>Gradle 7.6.3 · AGP 7.4.2 · JDK 17 · compileSdk 34 / minSdk 24</td></tr>
+    </table>
+
+    <h3 style="margin-bottom:16px;">Project Structure</h3>
+    <div class="step" style="margin-bottom:16px;padding-left:24px;">
+      <p><code>app/src/main/java/com/videorotator/</code></p>
+      <p><code>MainActivity.kt</code> — three-tab scaffold · <code>ui/components/</code> — player &amp; theme selector · <code>ui/screens/</code> — feature screens · <code>viewmodel/</code> — state management · <code>utils/</code> — scanning &amp; rotation</p>
+    </div>
+
+    <h3 style="margin-bottom:16px;">Build Locally</h3>
+    <div class="steps">
+      <div class="step">
+        <h4>Prepare the environment</h4>
+        <p>Install JDK 17 and the Android SDK, then set <code>sdk.dir</code> in <code>local.properties</code>.</p>
+      </div>
+      <div class="step">
+        <h4>Build the debug package</h4>
+        <p><code>./gradlew assembleDebug</code> — output at <code>app/build/outputs/apk/debug/app-debug.apk</code>.</p>
+      </div>
+      <div class="step">
+        <h4>Install &amp; test</h4>
+        <p><code>adb install -r app-debug.apk</code>, or open the app directly on an emulator / device to test rotation and playback.</p>
+      </div>
+    </div>
+
+    <h3 style="margin:32px 0 16px;">CI/CD (GitHub Actions)</h3>
+    <div class="grid">
+      <div class="card">
+        <div class="icon">🚀</div>
+        <h3>Build &amp; Release</h3>
+        <p>Push to <code>main</code> → builds an APK and updates the <code>latest</code> pre-release; push a <code>v*</code> tag → creates a formal Release with an installable APK attached. See <a href="https://github.com/QianYuan1437/VideoRotator/releases">Releases</a>.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📄</div>
+        <h3>Deploy Docs</h3>
+        <p>Any change under <code>docs/</code> automatically deploys this bilingual documentation site to GitHub Pages, so the docs update with every commit.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>VideoRotator — built with Kotlin + Jetpack Compose</p>
+    <p style="margin-top:6px;">
+      <a href="https://github.com/QianYuan1437/VideoRotator">GitHub</a> ·
+      <a href="https://github.com/QianYuan1437/VideoRotator/releases">Releases</a> ·
+      <a href="../../index.html">中文</a> ·
+      MIT License
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

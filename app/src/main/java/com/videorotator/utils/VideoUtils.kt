@@ -1,0 +1,248 @@
+package com.videorotator.utils
+
+import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
+import android.media.MediaMuxer
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import java.io.File
+import java.nio.ByteBuffer
+
+data class VideoInfo(
+    val uri: Uri,
+    val displayName: String,
+    val duration: Long,
+    val width: Int,
+    val height: Int,
+    val size: Long,
+    val dateAdded: Long,
+    val rotation: Int = 0
+) {
+    val isLandscape: Boolean get() = width > height
+    val resolution: String get() = "${width}×${height}"
+    val durationText: String get() {
+        val seconds = duration / 1000
+        val m = seconds / 60
+        val s = seconds % 60
+        return "%02d:%02d".format(m, s)
+    }
+    val sizeText: String get() {
+        val mb = size / (1024.0 * 1024.0)
+        return "%.1f MB".format(mb)
+    }
+}
+
+object VideoUtils {
+
+    private val videoExtensions = setOf("mp4", "mkv", "avi", "mov", "webm", "flv", "ts", "m4v", "3gp")
+
+    fun scanVideos(context: Context, directory: String? = null): List<VideoInfo> {
+        val videos = mutableListOf<VideoInfo>()
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        } else {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        }
+
+        val projection = arrayOf(
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.DURATION,
+            MediaStore.Video.Media.WIDTH,
+            MediaStore.Video.Media.HEIGHT,
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.DATE_ADDED
+        )
+
+        val selection = if (directory != null) {
+            "${MediaStore.Video.Media.DATA} LIKE ?"
+        } else null
+        val selectionArgs = if (directory != null) {
+            arrayOf("$directory%")
+        } else null
+
+        context.contentResolver.query(
+            collection, projection, selection, selectionArgs,
+            "${MediaStore.Video.Media.DATE_ADDED} DESC"
+        )?.use { cursor ->
+            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+            val durCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
+            val wCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.WIDTH)
+            val hCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.HEIGHT)
+            val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+            val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
+
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(nameCol) ?: continue
+                val ext = name.substringAfterLast('.', "").lowercase()
+                if (ext !in videoExtensions) continue
+
+                val id = cursor.getLong(idCol)
+                val uri = Uri.withAppendedPath(collection, id.toString())
+                val file = File(name)
+                val path = file.parent
+
+                if (directory != null && path != null && !path.startsWith(directory)) continue
+
+                val rotation = getRotation(context, uri)
+
+                videos.add(VideoInfo(
+                    uri = uri,
+                    displayName = name,
+                    duration = cursor.getLong(durCol),
+                    width = cursor.getInt(wCol),
+                    height = cursor.getInt(hCol),
+                    size = cursor.getLong(sizeCol),
+                    dateAdded = cursor.getLong(dateCol),
+                    rotation = rotation
+                ))
+            }
+        }
+        return videos
+    }
+
+    fun getRotation(context: Context, uri: Uri): Int {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(context, uri)
+            val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            } else 0
+            retriever.release()
+            rotation
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    /**
+     * 旋转视频90度（通过修改容器元数据，不重新编码，秒级完成）
+     * @param outputDir 自定义输出目录，为 null 时使用默认目录
+     * 返回输出文件路径
+     */
+    fun rotateVideo(
+        context: Context,
+        inputUri: Uri,
+        degrees: Int = 90,
+        outputDir: File? = null,
+        onProgress: (Float) -> Unit = {}
+    ): Result<String> {
+        return try {
+            val inputFile = getFileFromUri(context, inputUri)
+                ?: return Result.failure(Exception("无法访问源文件"))
+
+            val targetDir = outputDir ?: File(context.getExternalFilesDir(null), "rotated")
+            if (!targetDir.exists()) targetDir.mkdirs()
+
+            val baseName = inputFile.nameWithoutExtension
+            val outputName = "${baseName}_rotated_${degrees}deg.mp4"
+            val outputFile = File(outputDir, outputName)
+
+            // 如果已存在则先删除
+            if (outputFile.exists()) outputFile.delete()
+
+            onProgress(0.1f)
+
+            // 使用 MediaExtractor + MediaMuxer 修改旋转元数据
+            val extractor = MediaExtractor()
+            extractor.setDataSource(context, inputUri, null)
+
+            val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+            // 计算新的旋转角度
+            val originalRotation = getRotation(context, inputUri)
+            val newRotation = (originalRotation + degrees) % 360
+
+            var muxerStarted = false
+            val trackIndexMap = mutableMapOf<Int, Int>()
+            val buffer = ByteBuffer.allocate(1024 * 1024) // 1MB buffer
+
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+
+                if (mime.startsWith("video/")) {
+                    // 视频轨道：设置旋转
+                    val dstIndex = muxer.addTrack(format)
+                    trackIndexMap[i] = dstIndex
+                } else if (mime.startsWith("audio/")) {
+                    // 音频轨道：直接复制
+                    val dstIndex = muxer.addTrack(format)
+                    trackIndexMap[i] = dstIndex
+                }
+            }
+
+            // 设置旋转（通过 MediaMuxer 的 orientation hint）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                muxer.setOrientationHint(newRotation)
+            }
+
+            muxer.start()
+            muxerStarted = true
+            onProgress(0.3f)
+
+            val info = android.media.MediaCodec.BufferInfo()
+            var progress = 0.3f
+
+            for (srcIndex in trackIndexMap.keys) {
+                extractor.selectTrack(srcIndex)
+                val dstIndex = trackIndexMap[srcIndex]!!
+
+                while (true) {
+                    val sampleSize = extractor.readSampleData(buffer, 0)
+                    if (sampleSize < 0) break
+
+                    info.offset = 0
+                    info.size = sampleSize
+                    info.presentationTimeUs = extractor.sampleTime
+                    info.flags = extractor.sampleFlags
+
+                    muxer.writeSampleData(dstIndex, buffer, info)
+
+                    extractor.advance()
+
+                    // 更新进度
+                    progress += 0.001f
+                    if (progress < 0.95f) onProgress(progress)
+                }
+                extractor.unselectTrack(srcIndex)
+            }
+
+            onProgress(0.98f)
+
+            if (muxerStarted) muxer.stop()
+            muxer.release()
+            extractor.release()
+
+            onProgress(1.0f)
+            Result.success(outputFile.absolutePath)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun getFileFromUri(context: Context, uri: Uri): File? {
+        return try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(MediaStore.Video.Media.DATA)
+                if (nameIndex >= 0 && cursor.moveToFirst()) {
+                    val path = cursor.getString(nameIndex)
+                    if (path != null) return File(path)
+                }
+            }
+            // Fallback: try to get path from URI
+            uri.path?.let { File(it) }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun getDefaultVideoDirectory(): String {
+        return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES).absolutePath
+    }
+}
