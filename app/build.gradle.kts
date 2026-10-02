@@ -12,7 +12,25 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = "0.1.0"
+    }
+
+    signingConfigs {
+        // CI 环境无自定义密钥，使用本机默认的 ~/.android/debug.keystore。
+        // 必须同时开启 v1 / v2 / v3 三种签名方案：
+        // AGP 7.4 在某些 OEM（如 MIUI/EMUI）系统的 Package Installer 上，
+        // v2-only / v3-only APK 会报「解析软件包时出现问题 packageinfo is null」，
+        // 因此显式开启 v1 作为兼容兜底。
+        create("release") {
+            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+            enableV4Signing = false
+        }
     }
 
     buildTypes {
@@ -22,8 +40,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // CI 环境无自定义密钥，使用 debug 签名保证产物可直接安装
-            signingConfig = signingConfigs.getByName("debug")
+            // CI 环境无自定义密钥，使用上述显式开启 v1+v2+v3 的 release 配置
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
