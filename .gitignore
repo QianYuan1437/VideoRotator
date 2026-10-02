@@ -23,3 +23,4 @@ captures/
 # 签名密钥（不要提交）
 *.jks
 *.keystore
+__pycache__/
