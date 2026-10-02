@@ -242,7 +242,23 @@ object VideoUtils {
         }
     }
 
+    /** 通过 DATA 列查询内容 URI 对应的文件路径 */
+    fun getParentPath(context: Context, uri: Uri): String? {
+        return try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(MediaStore.Video.Media.DATA)
+                if (nameIndex >= 0 && cursor.moveToFirst()) {
+                    val path = cursor.getString(nameIndex)
+                    if (path != null) File(path).parent else null
+                } else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** 默认扫描目录：用户设备的"下载"目录 */
     fun getDefaultVideoDirectory(): String {
-        return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES).absolutePath
+        return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
     }
 }

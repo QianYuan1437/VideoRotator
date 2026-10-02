@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Rotate90DegreesCw
 import androidx.compose.material.icons.filled.Settings
@@ -41,6 +42,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.videorotator.ui.components.BackgroundMode
 import com.videorotator.ui.components.themeColors
 import com.videorotator.ui.screens.ConvertConfigScreen
+import com.videorotator.ui.screens.ConvertListScreen
 import com.videorotator.ui.screens.ConvertScreen
 import com.videorotator.ui.screens.FileBrowserScreen
 import com.videorotator.ui.screens.PlayerScreen
@@ -127,6 +129,7 @@ fun MainScreen(
 ) {
     val tabs = listOf(
         TabItem("视频列表", Icons.Filled.Movie),
+        TabItem("转换列表", Icons.Filled.History),
         TabItem("转换配置", Icons.Filled.Rotate90DegreesCw),
         TabItem("设置", Icons.Filled.Settings)
     )
@@ -192,9 +195,10 @@ fun MainScreen(
                                     colors = NavigationBarItemDefaults.colors(
                                         selectedIconColor = MaterialTheme.colorScheme.primary,
                                         selectedTextColor = MaterialTheme.colorScheme.primary,
-                                        unselectedIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                                        unselectedTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                                        indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                        unselectedIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                                        unselectedTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                                        // 实色浅色作为底色衬托，原图标颜色对下方，保持图标清晰
+                                        indicatorColor = MaterialTheme.colorScheme.primaryContainer
                                     )
                                 )
                             }
@@ -213,10 +217,16 @@ fun MainScreen(
                 when (selectedTab) {
                     0 -> FileBrowserTab(
                         fbViewModel = fbViewModel,
-                        onVideoClick = { video -> playingVideo = video }
+                        convertViewModel = convertViewModel,
+                        onVideoClick = { video ->
+                            // 记住该视频所在的目录（路径栏点击可跳回）
+                            fbViewModel.rememberPlayedVideo(video.uri)
+                            playingVideo = video
+                        }
                     )
-                    1 -> ConvertConfigTab()
-                    2 -> SettingsTab(
+                    1 -> ConvertListTab(convertViewModel)
+                    2 -> ConvertConfigTab()
+                    3 -> SettingsTab(
                         currentThemeColor = currentThemeColor,
                         currentBackgroundMode = currentBackgroundMode,
                         onThemeColorChanged = onThemeColorChanged,
@@ -231,21 +241,46 @@ fun MainScreen(
 @Composable
 fun FileBrowserTab(
     fbViewModel: FileBrowserViewModel,
+    convertViewModel: ConvertViewModel,
     onVideoClick: (VideoInfo) -> Unit
 ) {
     val state by fbViewModel.state.collectAsState()
+    val defaultOutputDir = android.os.Environment.getExternalStoragePublicDirectory(
+        android.os.Environment.DIRECTORY_DOWNLOADS
+    )
     FileBrowserScreen(
         state = state,
         onVideoClick = onVideoClick,
+        onToggleSelect = { fbViewModel.toggleSelect(it) },
         onRefresh = { fbViewModel.loadVideos() },
         onNavigateToParent = { fbViewModel.navigateToParent() },
-        onNavigateToDirectory = { path -> fbViewModel.navigateToDirectory(path) }
+        onNavigateToDirectory = { path -> fbViewModel.navigateToDirectory(path) },
+        onSortKeySelected = { fbViewModel.setSortKey(it) },
+        onToggleSelectMode = { fbViewModel.toggleSelectMode() },
+        onSelectAll = { fbViewModel.selectAll() },
+        onDeselectAll = { fbViewModel.deselectAll() },
+        onExitSelectMode = { fbViewModel.exitSelectMode() },
+        onBatchConvert = {
+            val selected = fbViewModel.selectedVideos()
+            if (selected.isNotEmpty()) {
+                selected.forEach { video ->
+                    convertViewModel.startJob(video, defaultOutputDir, 90)
+                }
+                fbViewModel.exitSelectMode()
+            }
+        },
+        onJumpToLastPlayed = { fbViewModel.jumpToLastPlayedParent() }
     )
 }
 
 @Composable
 fun ConvertConfigTab() {
     ConvertConfigScreen()
+}
+
+@Composable
+fun ConvertListTab(viewModel: ConvertViewModel) {
+    ConvertListScreen(viewModel = viewModel)
 }
 
 @Composable

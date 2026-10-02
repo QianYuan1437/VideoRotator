@@ -7,6 +7,7 @@ import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,25 +24,37 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SdStorage
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +74,7 @@ import com.videorotator.ui.theme.PurplePrimary
 import com.videorotator.ui.theme.White
 import com.videorotator.utils.VideoInfo
 import com.videorotator.viewmodel.FileBrowserState
+import com.videorotator.viewmodel.SortKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -68,9 +82,17 @@ import kotlinx.coroutines.withContext
 fun FileBrowserScreen(
     state: FileBrowserState,
     onVideoClick: (VideoInfo) -> Unit,
+    onToggleSelect: (Uri) -> Unit,
     onRefresh: () -> Unit,
     onNavigateToParent: () -> Unit,
     onNavigateToDirectory: (String) -> Unit,
+    onSortKeySelected: (SortKey) -> Unit,
+    onToggleSelectMode: () -> Unit,
+    onSelectAll: () -> Unit,
+    onDeselectAll: () -> Unit,
+    onExitSelectMode: () -> Unit,
+    onBatchConvert: () -> Unit,
+    onJumpToLastPlayed: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -78,12 +100,19 @@ fun FileBrowserScreen(
             .fillMaxSize()
             .background(PurpleBg)
     ) {
-        // 快捷目录栏
         QuickDirectoryBar(
             currentDir = state.currentDirectory,
+            lastPlayedParent = state.lastPlayedParent,
+            onJumpToLastPlayed = onJumpToLastPlayed,
             onNavigateToParent = onNavigateToParent,
             onNavigateToDirectory = onNavigateToDirectory,
-            onRefresh = onRefresh
+            onRefresh = onRefresh,
+            sortKey = state.sortKey,
+            onSortKeySelected = onSortKeySelected,
+            isSelectMode = state.isSelectMode,
+            onToggleSelectMode = onToggleSelectMode,
+            selectedCount = state.selectedUris.size,
+            totalCount = state.videos.size
         )
 
         if (state.isLoading) {
@@ -96,6 +125,16 @@ fun FileBrowserScreen(
         } else if (state.videos.isEmpty()) {
             EmptyState(onRefresh = onRefresh)
         } else {
+            if (state.isSelectMode) {
+                SelectActionBar(
+                    selectedCount = state.selectedUris.size,
+                    totalCount = state.videos.size,
+                    onSelectAll = onSelectAll,
+                    onDeselectAll = onDeselectAll,
+                    onBatchConvert = onBatchConvert,
+                    onExitSelectMode = onExitSelectMode
+                )
+            }
             LazyColumn(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -104,7 +143,16 @@ fun FileBrowserScreen(
                 items(state.videos, key = { it.uri.toString() }) { video ->
                     VideoCard(
                         video = video,
-                        onClick = { onVideoClick(video) }
+                        isSelectMode = state.isSelectMode,
+                        isSelected = state.selectedUris.contains(video.uri.toString()),
+                        onClick = {
+                            if (state.isSelectMode) {
+                                onToggleSelect(video.uri)
+                            } else {
+                                onVideoClick(video)
+                            }
+                        },
+                        onToggleSelect = { onToggleSelect(video.uri) }
                     )
                 }
             }
@@ -115,9 +163,17 @@ fun FileBrowserScreen(
 @Composable
 private fun QuickDirectoryBar(
     currentDir: String,
+    lastPlayedParent: String?,
+    onJumpToLastPlayed: () -> Unit,
     onNavigateToParent: () -> Unit,
     onNavigateToDirectory: (String) -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    sortKey: SortKey,
+    onSortKeySelected: (SortKey) -> Unit,
+    isSelectMode: Boolean,
+    onToggleSelectMode: () -> Unit,
+    selectedCount: Int,
+    totalCount: Int
 ) {
     Surface(
         color = White,
@@ -134,153 +190,224 @@ private fun QuickDirectoryBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    currentDir,
-                    fontSize = 13.sp,
-                    color = PurpleDark,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = onRefresh) {
-                    Icon(Icons.Filled.Refresh, "刷新", tint = PurpleDark)
+                // 当前路径 + 跳转到上次播放文件目录的入口
+                val canJump = lastPlayedParent != null && lastPlayedParent != currentDir
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        currentDir,
+                        fontSize = 13.sp,
+                        color = PurpleDark,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (canJump) {
+                        Spacer(Modifier.width(4.dp))
+                        TextButton(
+                            onClick = onJumpToLastPlayed,
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.History,
+                                null,
+                                tint = PurplePrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(2.dp))
+                            Text(
+                                "上次播放",
+                                fontSize = 12.sp,
+                                color = PurplePrimary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+                Row {
+                    IconButton(onClick = onRefresh) {
+                        Icon(Icons.Filled.Refresh, "刷新", tint = PurpleDark)
+                    }
+                    Box {
+                        var menuOpen by remember { mutableStateOf(false) }
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Filled.Sort, "排序", tint = PurpleDark)
+                        }
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false }
+                        ) {
+                            SortKey.values().forEach { key ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            key.label,
+                                            fontWeight = if (key == sortKey) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (key == sortKey) PurplePrimary else PurpleDark
+                                        )
+                                    },
+                                    onClick = {
+                                        onSortKeySelected(key)
+                                        menuOpen = false
+                                    },
+                                    leadingIcon = {
+                                        if (key == sortKey) {
+                                            Icon(
+                                                Icons.Filled.CheckBox,
+                                                null,
+                                                tint = PurplePrimary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        } else {
+                                            Spacer(Modifier.size(18.dp))
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    IconButton(onClick = onToggleSelectMode) {
+                        Icon(
+                            if (isSelectMode) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
+                            "多选",
+                            tint = if (isSelectMode) PurplePrimary else PurpleDark
+                        )
+                    }
                 }
             }
+            // 快捷目录按钮
+            val quickScroll = rememberScrollState()
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(quickScroll),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = PurpleLight,
-                    modifier = Modifier.clickable { onNavigateToParent() }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Filled.SdStorage, null, tint = PurpleDark, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("上级", fontSize = 13.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
-                    }
+                QuickDirChip(Icons.Filled.SdStorage, "上级", onClick = onNavigateToParent)
+                QuickDirChip(Icons.Filled.Movie, "Movies") {
+                    onNavigateToDirectory(
+                        android.os.Environment.getExternalStoragePublicDirectory(
+                            android.os.Environment.DIRECTORY_MOVIES
+                        ).absolutePath
+                    )
                 }
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = PurpleLight,
-                    modifier = Modifier.clickable {
-                        onNavigateToDirectory("/storage/emulated/0/Movies")
-                    }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Filled.Movie, null, tint = PurpleDark, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Movies", fontSize = 13.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
-                    }
+                QuickDirChip(Icons.Filled.Folder, "DCIM") {
+                    onNavigateToDirectory(
+                        android.os.Environment.getExternalStoragePublicDirectory(
+                            android.os.Environment.DIRECTORY_DCIM
+                        ).absolutePath
+                    )
                 }
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = PurpleLight,
-                    modifier = Modifier.clickable {
-                        onNavigateToDirectory("/storage/emulated/0/DCIM")
-                    }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Filled.Folder, null, tint = PurpleDark, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("DCIM", fontSize = 13.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
-                    }
+                QuickDirChip(Icons.Filled.Download, "下载") {
+                    onNavigateToDirectory(
+                        android.os.Environment.getExternalStoragePublicDirectory(
+                            android.os.Environment.DIRECTORY_DOWNLOADS
+                        ).absolutePath
+                    )
                 }
             }
         }
     }
 }
 
-// 视频缩略图内存缓存（按字节计量，上限 32MB）
-private val thumbnailCache = object : LruCache<String, Bitmap>(32 * 1024 * 1024) {
-    override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
-}
-
-/**
- * 视频首帧缩略图：Coil 无法解码视频帧，这里用 MediaMetadataRetriever
- * 在 IO 线程抽取首帧，降采样后放入内存缓存。
- */
+/** 快捷目录小标签（图标 + 文本） */
 @Composable
-private fun VideoThumbnail(
-    uri: Uri,
-    modifier: Modifier = Modifier
+private fun QuickDirChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit
 ) {
-    val context = LocalContext.current
-    var bitmap by remember(uri) {
-        mutableStateOf(thumbnailCache.get(uri.toString()))
-    }
-
-    if (bitmap == null) {
-        // 加载占位
-        Icon(
-            Icons.Filled.Movie,
-            null,
-            tint = PurplePrimary.copy(alpha = 0.5f),
-            modifier = Modifier.size(32.dp)
-        )
-        LaunchedEffect(uri) {
-            val frame = withContext(Dispatchers.IO) {
-                try {
-                    val retriever = MediaMetadataRetriever()
-                    try {
-                        retriever.setDataSource(context, uri)
-                        retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST)
-                    } finally {
-                        retriever.release()
-                    }
-                } catch (e: Exception) {
-                    null
-                }
-            }
-            frame?.let { raw ->
-                val scaled = raw.scaleForThumbnail(480)
-                thumbnailCache.put(uri.toString(), scaled)
-                bitmap = scaled
-            }
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = PurpleLight
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, null, tint = PurpleDark, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(label, fontSize = 13.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
         }
-    } else {
-        Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = modifier
-        )
     }
 }
 
-/** 超过 maxDim 的帧按比例降采样，避免大分辨率首帧占用过多内存 */
-private fun Bitmap.scaleForThumbnail(maxDim: Int): Bitmap {
-    val longest = maxOf(width, height)
-    if (longest <= maxDim) return this
-    val scale = maxDim.toFloat() / longest
-    return Bitmap.createScaledBitmap(
-        this,
-        (width * scale).toInt().coerceAtLeast(1),
-        (height * scale).toInt().coerceAtLeast(1),
-        true
-    )
+@Composable
+private fun SelectActionBar(
+    selectedCount: Int,
+    totalCount: Int,
+    onSelectAll: () -> Unit,
+    onDeselectAll: () -> Unit,
+    onBatchConvert: () -> Unit,
+    onExitSelectMode: () -> Unit
+) {
+    Surface(
+        color = PurplePrimary.copy(alpha = 0.10f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "已选 $selectedCount / $totalCount",
+                color = PurpleDark,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    if (selectedCount == totalCount) onDeselectAll() else onSelectAll()
+                }) {
+                    Text(
+                        if (selectedCount == totalCount) "取消全选" else "全选",
+                        color = PurplePrimary,
+                        fontSize = 13.sp
+                    )
+                }
+                Button(
+                    onClick = onBatchConvert,
+                    enabled = selectedCount > 0,
+                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        "批量转换$selectedCount",
+                        color = White,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.sp
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                TextButton(onClick = onExitSelectMode) {
+                    Text("退出", color = PurpleDark, fontSize = 13.sp)
+                }
+            }
+        }
+    }
 }
 
 @Composable
 private fun VideoCard(
     video: VideoInfo,
-    onClick: () -> Unit
+    isSelectMode: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onToggleSelect: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) PurplePrimary.copy(alpha = 0.12f) else White
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 2.dp else 4.dp),
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
@@ -363,6 +490,13 @@ private fun VideoCard(
                     color = Color.Gray
                 )
             }
+
+            if (isSelectMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelect() }
+                )
+            }
         }
     }
 }
@@ -405,4 +539,72 @@ private fun EmptyState(onRefresh: () -> Unit) {
             }
         }
     }
+}
+
+// 视频缩略图内存缓存（按字节计量，上限 32MB）
+private val thumbnailCache = object : LruCache<String, Bitmap>(32 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
+}
+
+/**
+ * 视频首帧缩略图：Coil 无法解码视频帧，这里用 MediaMetadataRetriever
+ * 在 IO 线程抽取首帧，降采样后放入内存缓存。
+ */
+@Composable
+private fun VideoThumbnail(
+    uri: Uri,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var bitmap by remember(uri) {
+        mutableStateOf(thumbnailCache.get(uri.toString()))
+    }
+
+    if (bitmap == null) {
+        Icon(
+            Icons.Filled.Movie,
+            null,
+            tint = PurplePrimary.copy(alpha = 0.5f),
+            modifier = Modifier.size(32.dp)
+        )
+        LaunchedEffect(uri) {
+            val frame = withContext(Dispatchers.IO) {
+                try {
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(context, uri)
+                        retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST)
+                    } finally {
+                        retriever.release()
+                    }
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            frame?.let { raw ->
+                val scaled = raw.scaleForThumbnail(480)
+                thumbnailCache.put(uri.toString(), scaled)
+                bitmap = scaled
+            }
+        }
+    } else {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+        )
+    }
+}
+
+private fun Bitmap.scaleForThumbnail(maxDim: Int): Bitmap {
+    val longest = maxOf(width, height)
+    if (longest <= maxDim) return this
+    val scale = maxDim.toFloat() / longest
+    return Bitmap.createScaledBitmap(
+        this,
+        (width * scale).toInt().coerceAtLeast(1),
+        (height * scale).toInt().coerceAtLeast(1),
+        true
+    )
 }

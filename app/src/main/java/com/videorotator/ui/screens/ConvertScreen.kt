@@ -72,7 +72,6 @@ import com.videorotator.ui.theme.PurpleLight
 import com.videorotator.ui.theme.PurplePrimary
 import com.videorotator.ui.theme.White
 import com.videorotator.utils.VideoInfo
-import com.videorotator.viewmodel.ConvertState
 import com.videorotator.viewmodel.ConvertViewModel
 import java.io.File
 
@@ -85,7 +84,6 @@ fun ConvertScreen(
     onConvertAnother: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val state by viewModel.state.collectAsState()
     val context = LocalContext.current
 
     // 路径选择状态
@@ -179,93 +177,61 @@ fun ConvertScreen(
             Spacer(Modifier.height(24.dp))
 
             // 保存路径选择卡片
-            if (!state.isConverting && !state.success) {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                    modifier = Modifier.fillMaxWidth()
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "保存位置",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 16.sp
-                            )
-                            TextButton(onClick = { showPathDialog = true }) {
-                                Text("更改", color = PurplePrimary)
-                            }
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = PurpleLight
-                        ) {
-                            Text(
-                                outputDir?.absolutePath ?: "应用私有目录/rotated",
-                                fontSize = 13.sp,
-                                color = PurpleDark,
-                                modifier = Modifier.padding(12.dp)
-                            )
+                        Text(
+                            "保存位置",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 16.sp
+                        )
+                        TextButton(onClick = { showPathDialog = true }) {
+                            Text("更改", color = PurplePrimary)
                         }
                     }
-                }
-
-                Spacer(Modifier.height(24.dp))
-
-                // 开始转换按钮
-                Button(
-                    onClick = { viewModel.convertVideo(videoInfo.uri, 90, outputDir) },
-                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.Rotate90DegreesCw, null, tint = White, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("开始转换", color = White, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = PurpleLight
+                    ) {
+                        Text(
+                            outputDir?.absolutePath ?: "应用私有目录/rotated",
+                            fontSize = 13.sp,
+                            color = PurpleDark,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
                 }
             }
 
-            // 转换状态
-            when {
-                state.isConverting -> {
-                    ConvertingState(progress = state.progress)
-                }
-                state.success -> {
-                    SuccessState(
-                        outputPath = state.outputPath ?: "",
-                        onOpenFolder = {
-                            state.outputPath?.let { path ->
-                                val file = File(path)
-                                val intent = Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(android.net.Uri.parse(file.parent), "resource/folder")
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                }
-                                try {
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "无法打开文件夹", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        onConvertAnother = onConvertAnother
-                    )
-                }
-                state.errorMessage != null -> {
-                    ErrorState(
-                        message = state.errorMessage ?: "未知错误",
-                        onRetry = { viewModel.convertVideo(videoInfo.uri, 90, outputDir) }
-                    )
-                }
+            Spacer(Modifier.height(24.dp))
+
+            // 开始转换按钮：派发到任务队列后跳转到“转换列表”查看实时进度
+            Button(
+                onClick = {
+                    viewModel.startJob(videoInfo, outputDir, 90)
+                    onConvertAnother()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Filled.Rotate90DegreesCw, null, tint = White, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("开始转换", color = White, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -304,7 +270,9 @@ private fun PathSelectionDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    var tempSelectedPath by remember { mutableStateOf(selectedPath) }
+    // 若父级未传选中项，默认选中第一个预设，避免直接确认时使用空路径
+    val initialPath = selectedPath ?: presetPaths.first().path
+    var tempSelectedPath by remember { mutableStateOf(initialPath) }
     var tempCustomPath by remember { mutableStateOf(customPath) }
     var tempUseCustomPath by remember { mutableStateOf(useCustomPath) }
 

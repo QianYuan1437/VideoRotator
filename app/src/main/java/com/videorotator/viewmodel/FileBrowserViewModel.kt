@@ -1,7 +1,7 @@
 package com.videorotator.viewmodel
 
 import android.app.Application
-import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.videorotator.utils.VideoInfo
@@ -14,18 +14,33 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+enum class SortKey(val label: String) {
+    DATE_DESC("最新优先"),
+    DATE_ASC("最旧优先"),
+    NAME_ASC("名称 A→Z"),
+    NAME_DESC("名称 Z→A"),
+    SIZE_DESC("最大优先"),
+    DURATION_DESC("时长最长")
+}
+
 data class FileBrowserState(
     val videos: List<VideoInfo> = emptyList(),
     val isLoading: Boolean = false,
     val currentDirectory: String = "",
     val errorMessage: String? = null,
-    val hasPermission: Boolean = false
+    val hasPermission: Boolean = false,
+    val sortKey: SortKey = SortKey.DATE_DESC,
+    val isSelectMode: Boolean = false,
+    val selectedUris: Set<String> = emptySet(),
+    val lastPlayedParent: String? = null
 )
 
 class FileBrowserViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(FileBrowserState())
     val state: StateFlow<FileBrowserState> = _state.asStateFlow()
+
+    private var rawVideos: List<VideoInfo> = emptyList()
 
     init {
         _state.value = _state.value.copy(
@@ -47,10 +62,9 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
                 val videos = withContext(Dispatchers.IO) {
                     VideoUtils.scanVideos(context, dir)
                 }
-                _state.value = _state.value.copy(
-                    videos = videos,
-                    isLoading = false
-                )
+                rawVideos = videos
+                applySort()
+                _state.value = _state.value.copy(isLoading = false)
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
                     isLoading = false,
@@ -58,6 +72,24 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
                 )
             }
         }
+    }
+
+    fun setSortKey(key: SortKey) {
+        _state.value = _state.value.copy(sortKey = key)
+        applySort()
+    }
+
+    private fun applySort() {
+        val key = _state.value.sortKey
+        val sorted = when (key) {
+            SortKey.DATE_DESC -> rawVideos.sortedByDescending { it.dateAdded }
+            SortKey.DATE_ASC -> rawVideos.sortedBy { it.dateAdded }
+            SortKey.NAME_ASC -> rawVideos.sortedBy { it.displayName.lowercase() }
+            SortKey.NAME_DESC -> rawVideos.sortedByDescending { it.displayName.lowercase() }
+            SortKey.SIZE_DESC -> rawVideos.sortedByDescending { it.size }
+            SortKey.DURATION_DESC -> rawVideos.sortedByDescending { it.duration }
+        }
+        _state.value = _state.value.copy(videos = sorted)
     }
 
     fun setPermissionGranted(granted: Boolean) {
@@ -77,5 +109,54 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
 
     fun navigateToDirectory(path: String) {
         setDirectory(path)
+    }
+
+    fun toggleSelectMode() {
+        _state.value = _state.value.copy(
+            isSelectMode = !_state.value.isSelectMode,
+            selectedUris = emptySet()
+        )
+    }
+
+    fun exitSelectMode() {
+        _state.value = _state.value.copy(isSelectMode = false, selectedUris = emptySet())
+    }
+
+    fun toggleSelect(uri: Uri) {
+        val s = _state.value.selectedUris.toMutableSet()
+        val key = uri.toString()
+        if (s.contains(key)) s.remove(key) else s.add(key)
+        _state.value = _state.value.copy(selectedUris = s)
+    }
+
+    fun selectAll() {
+        _state.value = _state.value.copy(
+            selectedUris = _state.value.videos.map { it.uri.toString() }.toSet()
+        )
+    }
+
+    fun deselectAll() {
+        _state.value = _state.value.copy(selectedUris = emptySet())
+    }
+
+    fun selectedVideos(): List<VideoInfo> {
+        val keys = _state.value.selectedUris
+        return _state.value.videos.filter { keys.contains(it.uri.toString()) }
+    }
+
+    /** 记录最近播放的视频所在目录，供路径栏点击跳转 */
+    fun rememberPlayedVideo(uri: Uri) {
+        val parent = VideoUtils.getParentPath(getApplication(), uri) ?: return
+        if (_state.value.lastPlayedParent != parent) {
+            _state.value = _state.value.copy(lastPlayedParent = parent)
+        }
+    }
+
+    /** 跳转到上次播放视频所在的目录（如与当前相同则忽略） */
+    fun jumpToLastPlayedParent() {
+        val target = _state.value.lastPlayedParent ?: return
+        if (target != _state.value.currentDirectory) {
+            setDirectory(target)
+        }
     }
 }
