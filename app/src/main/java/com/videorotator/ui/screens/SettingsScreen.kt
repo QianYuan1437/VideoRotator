@@ -1,5 +1,8 @@
 package com.videorotator.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +25,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
@@ -32,6 +36,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -75,6 +80,9 @@ fun SettingsScreen(
         mutableStateOf(PlayerPrefs.getAutoPlay(context))
     }
     var speedMenuOpen by remember { mutableStateOf(false) }
+    var showVersionDialog by remember { mutableStateOf(false) }
+    var showLicensesDialog by remember { mutableStateOf(false) }
+    var showPrivacyDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -335,25 +343,34 @@ fun SettingsScreen(
             SettingsItem(
                 title = "版本",
                 subtitle = "1.0.0",
-                onClick = { }
+                onClick = { showVersionDialog = true }
             )
             Divider(color = PurpleLight)
             SettingsItem(
                 title = "开源许可",
                 subtitle = "查看第三方库许可",
-                onClick = { }
+                onClick = { showLicensesDialog = true }
             )
             Divider(color = PurpleLight)
             SettingsItem(
                 title = "隐私政策",
                 subtitle = "查看隐私政策",
-                onClick = { }
+                onClick = { showPrivacyDialog = true }
             )
             Divider(color = PurpleLight)
             SettingsItem(
                 title = "检查更新",
-                subtitle = "当前已是最新版本",
-                onClick = { }
+                subtitle = "查看最新发布版本",
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(
+                        "https://github.com/QianYuan1437/VideoRotator/releases"
+                    ))
+                    try {
+                        context.startActivity(intent)
+                    } catch (_: Exception) {
+                        // 浏览器不可用时忽略
+                    }
+                }
             )
         }
 
@@ -381,6 +398,151 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+
+    // ===== 关于 - 版本号对话框 =====
+    if (showVersionDialog) {
+        val versionName: String = try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
+        } catch (_: Exception) {
+            "1.0.0"
+        }
+        val versionCode: Long = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                @Suppress("DEPRECATION")
+                val info = context.packageManager.getPackageInfo(context.packageName, 0)
+                info.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0).versionCode.toLong()
+            }
+        } catch (_: Exception) {
+            1L
+        }
+        AlertDialog(
+            onDismissRequest = { showVersionDialog = false },
+            title = { Text("应用版本", fontWeight = FontWeight.Bold, color = PurpleDark) },
+            text = {
+                Column {
+                    InfoRow("应用名称", "VideoRotator")
+                    InfoRow("版本号", versionName)
+                    InfoRow("构建号", versionCode.toString())
+                    InfoRow("包名", context.packageName)
+                    InfoRow("目标 SDK", "34")
+                    InfoRow("最低 SDK", "24")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showVersionDialog = false }) {
+                    Text("确定", color = PurplePrimary)
+                }
+            },
+            containerColor = White,
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
+
+    // ===== 关于 - 开源许可对话框 =====
+    if (showLicensesDialog) {
+        AlertDialog(
+            onDismissRequest = { showLicensesDialog = false },
+            title = { Text("开源许可", fontWeight = FontWeight.Bold, color = PurpleDark) },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        "本应用使用以下开源库，遵循各自许可证：",
+                        fontSize = 13.sp,
+                        color = PurpleDark,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    LicenseRow(
+                        name = "AndroidX Core / AppCompat",
+                        license = "Apache License 2.0"
+                    )
+                    LicenseRow(
+                        name = "Jetpack Compose (Material 3 / Foundation)",
+                        license = "Apache License 2.0"
+                    )
+                    LicenseRow(
+                        name = "AndroidX Media3 (ExoPlayer)",
+                        license = "Apache License 2.0",
+                        note = "1.2.1"
+                    )
+                    LicenseRow(
+                        name = "AndroidX Lifecycle / ViewModel",
+                        license = "Apache License 2.0"
+                    )
+                    LicenseRow(
+                        name = "AndroidX DocumentFile",
+                        license = "Apache License 2.0"
+                    )
+                    LicenseRow(
+                        name = "Kotlin Coroutines",
+                        license = "Apache License 2.0",
+                        note = "1.7.3"
+                    )
+                    Text(
+                        "完整许可文本可在项目仓库的 LICENSE / NOTICE 文件查看。",
+                        fontSize = 12.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLicensesDialog = false }) {
+                    Text("关闭", color = PurplePrimary)
+                }
+            },
+            containerColor = White,
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
+
+    // ===== 关于 - 隐私政策对话框 =====
+    if (showPrivacyDialog) {
+        AlertDialog(
+            onDismissRequest = { showPrivacyDialog = false },
+            title = { Text("隐私政策", fontWeight = FontWeight.Bold, color = PurpleDark) },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        "VideoRotator 重视您的隐私，承诺如下：",
+                        fontSize = 14.sp,
+                        color = PurpleDark,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    PrivacySection(
+                        title = "1. 本地处理",
+                        body = "所有视频旋转操作均在您的设备上完成，原始视频和转换结果不会上传到任何服务器。"
+                    )
+                    PrivacySection(
+                        title = "2. 不收集数据",
+                        body = "本应用不包含任何分析、统计或跟踪 SDK，不会上传您的使用数据。"
+                    )
+                    PrivacySection(
+                        title = "3. 文件访问权限",
+                        body = "应用仅通过 Android 媒体库或您主动选择的文件夹读取视频；Android 13 及以上使用 READ_MEDIA_VIDEO，更早版本使用 READ_EXTERNAL_STORAGE。系统文件夹选择器（SAF）选择目录时仅您主动授权的目录可被访问。"
+                    )
+                    PrivacySection(
+                        title = "4. 输出位置",
+                        body = "转换后的视频默认保存到应用私有目录（Android/data/com.videorotator/files）或您指定的文件夹。"
+                    )
+                    PrivacySection(
+                        title = "5. 开源",
+                        body = "本应用为开源项目，源代码可在 GitHub 仓库查看，便于您审查全部实现。"
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPrivacyDialog = false }) {
+                    Text("我知道了", color = PurplePrimary)
+                }
+            },
+            containerColor = White,
+            shape = RoundedCornerShape(20.dp)
+        )
     }
 }
 
@@ -465,6 +627,81 @@ private fun SettingsItem(
             null,
             tint = PurplePrimary.copy(alpha = 0.5f),
             modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+/** 通用键值对行（用于版本号对话框） */
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            fontSize = 13.sp,
+            color = Color.Gray,
+            modifier = Modifier.width(96.dp)
+        )
+        Text(
+            value,
+            fontSize = 13.sp,
+            color = PurpleDark,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+/** 开源许可项 */
+@Composable
+private fun LicenseRow(name: String, license: String, note: String? = null) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                name,
+                fontSize = 14.sp,
+                color = PurpleDark,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f)
+            )
+            if (note != null) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = PurpleLight
+                ) {
+                    Text(
+                        note,
+                        fontSize = 11.sp,
+                        color = PurplePrimary,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                    )
+                }
+            }
+        }
+        Text(
+            license,
+            fontSize = 12.sp,
+            color = Color.Gray
+        )
+    }
+}
+
+/** 隐私政策段落 */
+@Composable
+private fun PrivacySection(title: String, body: String) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
+        Text(
+            title,
+            fontSize = 13.sp,
+            color = PurplePrimary,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            body,
+            fontSize = 13.sp,
+            color = PurpleDark,
+            modifier = Modifier.padding(top = 2.dp)
         )
     }
 }
