@@ -1,5 +1,10 @@
 package com.videorotator.ui.screens
 
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.util.LruCache
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -33,18 +38,22 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.videorotator.ui.theme.PurpleBg
 import com.videorotator.ui.theme.PurpleDark
 import com.videorotator.ui.theme.PurpleLight
@@ -52,6 +61,8 @@ import com.videorotator.ui.theme.PurplePrimary
 import com.videorotator.ui.theme.White
 import com.videorotator.utils.VideoInfo
 import com.videorotator.viewmodel.FileBrowserState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun FileBrowserScreen(
@@ -191,6 +202,76 @@ private fun QuickDirectoryBar(
     }
 }
 
+// 视频缩略图内存缓存（按字节计量，上限 32MB）
+private val thumbnailCache = object : LruCache<String, Bitmap>(32 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
+}
+
+/**
+ * 视频首帧缩略图：Coil 无法解码视频帧，这里用 MediaMetadataRetriever
+ * 在 IO 线程抽取首帧，降采样后放入内存缓存。
+ */
+@Composable
+private fun VideoThumbnail(
+    uri: Uri,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var bitmap by remember(uri) {
+        mutableStateOf(thumbnailCache.get(uri.toString()))
+    }
+
+    if (bitmap == null) {
+        // 加载占位
+        Icon(
+            Icons.Filled.Movie,
+            null,
+            tint = PurplePrimary.copy(alpha = 0.5f),
+            modifier = Modifier.size(32.dp)
+        )
+        LaunchedEffect(uri) {
+            val frame = withContext(Dispatchers.IO) {
+                try {
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(context, uri)
+                        retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST)
+                    } finally {
+                        retriever.release()
+                    }
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            frame?.let { raw ->
+                val scaled = raw.scaleForThumbnail(480)
+                thumbnailCache.put(uri.toString(), scaled)
+                bitmap = scaled
+            }
+        }
+    } else {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+        )
+    }
+}
+
+/** 超过 maxDim 的帧按比例降采样，避免大分辨率首帧占用过多内存 */
+private fun Bitmap.scaleForThumbnail(maxDim: Int): Bitmap {
+    val longest = maxOf(width, height)
+    if (longest <= maxDim) return this
+    val scale = maxDim.toFloat() / longest
+    return Bitmap.createScaledBitmap(
+        this,
+        (width * scale).toInt().coerceAtLeast(1),
+        (height * scale).toInt().coerceAtLeast(1),
+        true
+    )
+}
+
 @Composable
 private fun VideoCard(
     video: VideoInfo,
@@ -218,20 +299,9 @@ private fun VideoCard(
                     .background(PurpleLight),
                 contentAlignment = Alignment.Center
             ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(video.uri)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
+                VideoThumbnail(
+                    uri = video.uri,
                     modifier = Modifier.fillMaxSize()
-                )
-                Icon(
-                    Icons.Filled.Movie,
-                    null,
-                    tint = PurplePrimary.copy(alpha = 0.5f),
-                    modifier = Modifier.size(32.dp)
                 )
             }
 

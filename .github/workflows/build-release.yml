@@ -67,6 +67,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view "latest" > /dev/null 2>&1; then
+            # 删除历史构建资产，只保留本次产物，避免用户下载到过期 APK
+            gh release view "latest" --json assets --jq '.assets[].name' \
+              | grep '^VideoRotator-build-.*\.apk$' | while read -r old; do
+                  gh release delete-asset "latest" "$old" --yes || true
+                done
             gh release upload "latest" dist/*.apk --clobber
           else
             gh release create "latest" dist/*.apk \

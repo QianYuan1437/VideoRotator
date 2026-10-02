@@ -149,6 +149,9 @@ def main():
     glyph_hi = render_glyph(N)                       # 4000px 字形
     gradient_hi = make_gradient(N)
 
+    # legacy 图标内容缩放：给圆形遮罩留出边距，避免箭头贴边
+    glyph_legacy = scale_about_center(glyph_hi, 0.86)
+
     # ---------- legacy 图标 ----------
     densities = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
     for name, size in densities.items():
@@ -156,7 +159,7 @@ def main():
         os.makedirs(folder, exist_ok=True)
         ss = size * SS
         g = gradient_hi.resize((ss, ss), Image.BICUBIC).convert("RGBA")
-        fg = glyph_hi.resize((ss, ss), Image.LANCZOS)
+        fg = glyph_legacy.resize((ss, ss), Image.LANCZOS)
         icon = Image.new("RGBA", (ss, ss))
         icon.paste(g)
         icon.alpha_composite(fg)
@@ -171,9 +174,11 @@ def main():
         round_icon.paste(icon, (0, 0), m)
         round_icon.save(os.path.join(folder, "ic_launcher_round.png"))
 
-    # ---------- 自适应图标前景（中心缩放 0.68 以适配 72dp 可视圆） ----------
+    # ---------- 自适应图标前景 ----------
+    # 内容整体（含箭头）最大半径 474/500，缩放 0.58 后最大直径约 59.4dp，
+    # 严格落在 66dp 安全区内（各 OEM 激进遮罩下也不会裁掉 VR 字母）
     fg_sizes = {"mdpi": 108, "hdpi": 162, "xhdpi": 216, "xxhdpi": 324, "xxxhdpi": 432}
-    scaled = scale_about_center(glyph_hi, 0.68)
+    scaled = scale_about_center(glyph_hi, 0.58)
     for name, size in fg_sizes.items():
         folder = os.path.join(RES, f"mipmap-{name}")
         os.makedirs(folder, exist_ok=True)
