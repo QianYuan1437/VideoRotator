@@ -16,13 +16,10 @@ android {
     }
 
     signingConfigs {
-        // CI 环境无自定义密钥，使用本机默认的 ~/.android/debug.keystore。
-        // 必须同时开启 v1 / v2 / v3 三种签名方案：
-        // AGP 7.4 在某些 OEM（如 MIUI/EMUI）系统的 Package Installer 上，
-        // v2-only / v3-only APK 会报「解析软件包时出现问题 packageinfo is null」，
-        // 因此显式开启 v1 作为兼容兜底。
+        // 使用仓库内固定签名的 keystore（tools/signing/debug.keystore），保证 v0.1.0
+        // / v0.1.1 / 后续版本签名一致，App 内的「检查更新」可以直接覆盖安装。
         create("release") {
-            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storeFile = file("../tools/signing/debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"

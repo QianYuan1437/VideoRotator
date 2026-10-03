@@ -27,17 +27,8 @@ jobs:
         with:
           gradle-version: '7.6.3'
 
-      - name: Ensure debug keystore exists
-        run: |
-          if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            mkdir -p "$HOME/.android"
-            keytool -genkeypair -v \
-              -keystore "$HOME/.android/debug.keystore" \
-              -alias androiddebugkey \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass android -keypass android \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
+      # 直接使用仓库内固定签名的 keystore；不在 CI 上每次都重新生成，
+      # 确保前后版本签名一致，「检查更新」可覆盖安装。
 
       - name: Build Release APK
         run: gradle assembleRelease --no-daemon
