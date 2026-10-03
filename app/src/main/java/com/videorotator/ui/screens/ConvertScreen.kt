@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Rotate90DegreesCw
 import androidx.compose.material3.AlertDialog
@@ -80,6 +81,9 @@ import java.io.File
 fun ConvertScreen(
     videoInfo: VideoInfo,
     viewModel: ConvertViewModel,
+    pickedOutputTreeUri: android.net.Uri?,
+    onPickDirectory: () -> Unit,
+    onClearPickedDirectory: () -> Unit,
     onBack: () -> Unit,
     onConvertAnother: () -> Unit,
     modifier: Modifier = Modifier
@@ -89,7 +93,6 @@ fun ConvertScreen(
     // 路径选择状态
     var showPathDialog by remember { mutableStateOf(false) }
     var selectedPath by remember { mutableStateOf<String?>(null) }
-    var customPath by remember { mutableStateOf("") }
     var useCustomPath by remember { mutableStateOf(false) }
 
     // 预设路径选项
@@ -99,16 +102,21 @@ fun ConvertScreen(
             PathOption("Movies", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES).absolutePath, "系统视频目录"),
             PathOption("DCIM", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM).absolutePath, "系统相册目录"),
             PathOption("Download", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath, "下载目录"),
-            PathOption("自定义路径", "", "手动输入保存路径")
+            // 自定义路径不再有预设 path；选中后由 SAF 选择器给出
+            PathOption(
+                "自定义路径",
+                pickedOutputTreeUri?.let { com.videorotator.utils.VideoUtils.describeTreeUri(it) }.orEmpty(),
+                "从系统选择器挑选文件夹"
+            )
         )
     }
 
-    // 获取实际使用的输出目录
-    val outputDir = remember(selectedPath, useCustomPath, customPath) {
+    // 获取实际使用的输出目录：File 形式 vs SAF 形式互斥
+    val outputDir = remember(selectedPath, useCustomPath) {
         when {
-            useCustomPath && customPath.isNotBlank() -> File(customPath)
+            useCustomPath -> null  // 自定义走 SAF
             selectedPath != null -> File(selectedPath!!)
-            else -> null
+            else -> null  // 默认走应用私有目录（File?）
         }
     }
 
@@ -208,9 +216,13 @@ fun ConvertScreen(
                         color = PurpleLight
                     ) {
                         Text(
-                            outputDir?.absolutePath ?: "应用私有目录/rotated",
+                            outputDir?.absolutePath
+                                ?: pickedOutputTreeUri?.let { com.videorotator.utils.VideoUtils.describeTreeUri(it) }
+                                ?: "应用私有目录/rotated",
                             fontSize = 13.sp,
                             color = PurpleDark,
+                            maxLines = 2,
+                            softWrap = false,
                             modifier = Modifier.padding(12.dp)
                         )
                     }
@@ -219,10 +231,15 @@ fun ConvertScreen(
 
             Spacer(Modifier.height(24.dp))
 
-            // 开始转换按钮：派发到任务队列后跳转到“转换列表”查看实时进度
+            // 开始转换按钮：派发到任务队列后跳转到"转换列表"查看实时进度
             Button(
                 onClick = {
-                    viewModel.startJob(videoInfo, outputDir, 90)
+                    viewModel.startJob(
+                        videoInfo = videoInfo,
+                        outputDir = outputDir,
+                        outputTreeUri = if (useCustomPath) pickedOutputTreeUri else null,
+                        degrees = 90
+                    )
                     onConvertAnother()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
@@ -241,20 +258,26 @@ fun ConvertScreen(
         PathSelectionDialog(
             presetPaths = presetPaths,
             selectedPath = selectedPath,
-            customPath = customPath,
             useCustomPath = useCustomPath,
+            pickedOutputTreeUri = pickedOutputTreeUri,
+            onPickDirectory = onPickDirectory,
             onPathSelected = { path, isCustom ->
                 if (isCustom) {
                     useCustomPath = true
-                    customPath = path
                 } else {
                     useCustomPath = false
                     selectedPath = path
                 }
             },
-            onCustomPathChanged = { customPath = it },
             onDismiss = { showPathDialog = false },
-            onConfirm = { showPathDialog = false }
+            onConfirm = {
+                if (useCustomPath && pickedOutputTreeUri == null) {
+                    // 选了自定义但还没选目录，自动打开选择器
+                    onPickDirectory()
+                } else {
+                    showPathDialog = false
+                }
+            }
         )
     }
 }
@@ -263,18 +286,17 @@ fun ConvertScreen(
 private fun PathSelectionDialog(
     presetPaths: List<PathOption>,
     selectedPath: String?,
-    customPath: String,
     useCustomPath: Boolean,
+    pickedOutputTreeUri: android.net.Uri?,
+    onPickDirectory: () -> Unit,
     onPathSelected: (String, Boolean) -> Unit,
-    onCustomPathChanged: (String) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    // 若父级未传选中项，默认选中第一个预设，避免直接确认时使用空路径
     val initialPath = selectedPath ?: presetPaths.first().path
     var tempSelectedPath by remember { mutableStateOf(initialPath) }
-    var tempCustomPath by remember { mutableStateOf(customPath) }
     var tempUseCustomPath by remember { mutableStateOf(useCustomPath) }
+    val pickedDescription = pickedOutputTreeUri?.let { com.videorotator.utils.VideoUtils.describeTreeUri(it) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -326,29 +348,95 @@ private fun PathSelectionDialog(
                                     path.path,
                                     fontSize = 11.sp,
                                     color = Color.Gray,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }
                     }
                 }
 
-                // 自定义路径输入
+                // 自定义路径：点选单选项即弹出系统文件夹选择器
                 AnimatedVisibility(visible = tempUseCustomPath) {
                     Column {
                         Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = tempCustomPath,
-                            onValueChange = { tempCustomPath = it },
-                            label = { Text("输入完整路径") },
-                            placeholder = { Text("/storage/emulated/0/MyVideos") },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = PurplePrimary,
-                                cursorColor = PurplePrimary
-                            )
-                        )
+                        if (pickedDescription.isNullOrBlank()) {
+                            // 还没挑过目录 → 显示"挑一个"按钮
+                            Surface(
+                                onClick = onPickDirectory,
+                                shape = RoundedCornerShape(12.dp),
+                                color = PurpleLight,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Folder,
+                                        contentDescription = "选择文件夹",
+                                        tint = PurplePrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            "选择其他文件夹",
+                                            fontSize = 14.sp,
+                                            color = PurpleDark,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            "通过系统选择器指定保存位置",
+                                            fontSize = 11.sp,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            // 已挑过 → 显示当前路径 + 重新选择
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = PurpleLight,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Folder,
+                                        contentDescription = null,
+                                        tint = PurplePrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            pickedDescription,
+                                            fontSize = 13.sp,
+                                            color = PurpleDark,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 2,
+                                            softWrap = false
+                                        )
+                                        Text(
+                                            "已通过系统选择器指定",
+                                            fontSize = 11.sp,
+                                            color = PurplePrimary
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            TextButton(
+                                onClick = onPickDirectory,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("重新选择文件夹", color = PurplePrimary)
+                            }
+                        }
                     }
                 }
             }
@@ -357,7 +445,7 @@ private fun PathSelectionDialog(
             Button(
                 onClick = {
                     if (tempUseCustomPath) {
-                        onPathSelected(tempCustomPath, true)
+                        onPathSelected("", true)
                     } else {
                         onPathSelected(tempSelectedPath ?: "", false)
                     }

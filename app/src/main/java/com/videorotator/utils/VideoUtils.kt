@@ -124,16 +124,21 @@ object VideoUtils {
 
     /**
      * 旋转视频90度（通过修改容器元数据，不重新编码，秒级完成）
-     * @param outputDir 自定义输出目录，为 null 时使用默认目录
-     * 返回输出文件路径
+     * @param outputDir 自定义输出目录（File 形式），与 outputTreeUri 二选一
+     * @param outputTreeUri SAF 选择的输出文件夹（content:// 形式），与 outputDir 二选一
+     * 返回输出文件路径（SAF 时返回 content:// uri 字符串）
      */
     fun rotateVideo(
         context: Context,
         inputUri: Uri,
         degrees: Int = 90,
         outputDir: File? = null,
+        outputTreeUri: Uri? = null,
         onProgress: (Float) -> Unit = {}
     ): Result<String> {
+        if (outputTreeUri != null) {
+            return rotateVideoToTree(context, inputUri, degrees, outputTreeUri, onProgress)
+        }
         return try {
             val inputFile = getFileFromUri(context, inputUri)
                 ?: return Result.failure(Exception("无法访问源文件"))
@@ -143,89 +148,202 @@ object VideoUtils {
 
             val baseName = inputFile.nameWithoutExtension
             val outputName = "${baseName}_rotated_${degrees}deg.mp4"
-            val outputFile = File(outputDir, outputName)
+            val outputFile = File(targetDir, outputName)
 
             // 如果已存在则先删除
             if (outputFile.exists()) outputFile.delete()
 
             onProgress(0.1f)
 
-            // 使用 MediaExtractor + MediaMuxer 修改旋转元数据
-            val extractor = MediaExtractor()
-            extractor.setDataSource(context, inputUri, null)
-
-            val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-
-            // 计算新的旋转角度
-            val originalRotation = getRotation(context, inputUri)
-            val newRotation = (originalRotation + degrees) % 360
-
-            var muxerStarted = false
-            val trackIndexMap = mutableMapOf<Int, Int>()
-            val buffer = ByteBuffer.allocate(1024 * 1024) // 1MB buffer
-
-            for (i in 0 until extractor.trackCount) {
-                val format = extractor.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-
-                if (mime.startsWith("video/")) {
-                    // 视频轨道：设置旋转
-                    val dstIndex = muxer.addTrack(format)
-                    trackIndexMap[i] = dstIndex
-                } else if (mime.startsWith("audio/")) {
-                    // 音频轨道：直接复制
-                    val dstIndex = muxer.addTrack(format)
-                    trackIndexMap[i] = dstIndex
-                }
-            }
-
-            // 设置旋转（通过 MediaMuxer 的 orientation hint）
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                muxer.setOrientationHint(newRotation)
-            }
-
-            muxer.start()
-            muxerStarted = true
-            onProgress(0.3f)
-
-            val info = android.media.MediaCodec.BufferInfo()
-            var progress = 0.3f
-
-            for (srcIndex in trackIndexMap.keys) {
-                extractor.selectTrack(srcIndex)
-                val dstIndex = trackIndexMap[srcIndex]!!
-
-                while (true) {
-                    val sampleSize = extractor.readSampleData(buffer, 0)
-                    if (sampleSize < 0) break
-
-                    info.offset = 0
-                    info.size = sampleSize
-                    info.presentationTimeUs = extractor.sampleTime
-                    info.flags = extractor.sampleFlags
-
-                    muxer.writeSampleData(dstIndex, buffer, info)
-
-                    extractor.advance()
-
-                    // 更新进度
-                    progress += 0.001f
-                    if (progress < 0.95f) onProgress(progress)
-                }
-                extractor.unselectTrack(srcIndex)
-            }
-
-            onProgress(0.98f)
-
-            if (muxerStarted) muxer.stop()
-            muxer.release()
-            extractor.release()
-
-            onProgress(1.0f)
-            Result.success(outputFile.absolutePath)
+            val result = doRotate(
+                context = context,
+                inputUri = inputUri,
+                outputFileDescriptor = null,
+                outputFilePath = outputFile.absolutePath,
+                degrees = degrees,
+                onProgress = onProgress
+            )
+            if (result.isSuccess) Result.success(outputFile.absolutePath) else result
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    /**
+     * 旋转到 SAF 选定的文件夹（content:// tree uri）
+     */
+    private fun rotateVideoToTree(
+        context: Context,
+        inputUri: Uri,
+        degrees: Int,
+        outputTreeUri: Uri,
+        onProgress: (Float) -> Unit
+    ): Result<String> {
+        var pfd: android.os.ParcelFileDescriptor? = null
+        return try {
+            val tree = DocumentFile.fromTreeUri(context, outputTreeUri)
+                ?: return Result.failure(Exception("无法访问所选文件夹"))
+
+            val baseName = queryDisplayName(context, inputUri)?.substringBeforeLast('.')
+                ?: inputUri.lastPathSegment?.substringBeforeLast('.')
+                ?: "rotated"
+            val outputName = "${baseName}_rotated_${degrees}deg.mp4"
+
+            // 移除同名旧文件
+            tree.findFile(outputName)?.delete()
+
+            val outputDoc = tree.createFile("video/mp4", outputName)
+                ?: return Result.failure(Exception("无法在所选文件夹中创建文件"))
+
+            pfd = context.contentResolver.openFileDescriptor(outputDoc.uri, "w")
+                ?: return Result.failure(Exception("无法打开输出文件流"))
+
+            doRotate(
+                context = context,
+                inputUri = inputUri,
+                outputFileDescriptor = pfd.fileDescriptor,
+                outputFilePath = null,
+                degrees = degrees,
+                onProgress = onProgress
+            ).also {
+                if (it.isSuccess) {
+                    // 返回 content uri 字符串
+                    it.getOrNull()?.let { _ -> /* keep Result path */ }
+                }
+            }.let { r ->
+                if (r.isSuccess) Result.success(outputDoc.uri.toString()) else r
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            pfd?.close()
+        }
+    }
+
+    /**
+     * 实际执行 MediaExtractor + MediaMuxer 流程。
+     * outputFileDescriptor 优先；为 null 时使用 outputFilePath。
+     */
+    private fun doRotate(
+        context: Context,
+        inputUri: Uri,
+        outputFileDescriptor: java.io.FileDescriptor?,
+        outputFilePath: String?,
+        degrees: Int,
+        onProgress: (Float) -> Unit
+    ): Result<String> = try {
+        val extractor = MediaExtractor()
+        extractor.setDataSource(context, inputUri, null)
+
+        val muxer = if (outputFileDescriptor != null) {
+            MediaMuxer(outputFileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        } else {
+            MediaMuxer(outputFilePath!!, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        }
+
+        val newRotation = (getRotation(context, inputUri) + degrees) % 360
+
+        var muxerStarted = false
+        val trackIndexMap = mutableMapOf<Int, Int>()
+        val buffer = ByteBuffer.allocate(1024 * 1024)
+
+        for (i in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(i)
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+            if (mime.startsWith("video/") || mime.startsWith("audio/")) {
+                trackIndexMap[i] = muxer.addTrack(format)
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            muxer.setOrientationHint(newRotation)
+        }
+
+        muxer.start()
+        muxerStarted = true
+        onProgress(0.3f)
+
+        val info = android.media.MediaCodec.BufferInfo()
+        var progress = 0.3f
+        for (srcIndex in trackIndexMap.keys) {
+            extractor.selectTrack(srcIndex)
+            val dstIndex = trackIndexMap[srcIndex]!!
+            while (true) {
+                val sampleSize = extractor.readSampleData(buffer, 0)
+                if (sampleSize < 0) break
+                info.offset = 0
+                info.size = sampleSize
+                info.presentationTimeUs = extractor.sampleTime
+                info.flags = extractor.sampleFlags
+                muxer.writeSampleData(dstIndex, buffer, info)
+                extractor.advance()
+                progress += 0.001f
+                if (progress < 0.95f) onProgress(progress)
+            }
+            extractor.unselectTrack(srcIndex)
+        }
+        onProgress(0.98f)
+        if (muxerStarted) muxer.stop()
+        muxer.release()
+        extractor.release()
+        onProgress(1.0f)
+        Result.success("ok")
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    /** 通过 ContentResolver 查询 OpenableColumns.DISPLAY_NAME */
+    private fun queryDisplayName(context: Context, uri: Uri): String? {
+        return try {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+        } catch (_: Exception) { null }
+    }
+
+    /**
+     * 扫描应用私有目录 /Android/data/<pkg>/files/rotated/ 下的转换产物
+     * （MediaStore 不会索引这些路径，所以需要单独扫描才能在列表中显示）
+     */
+    fun scanConvertedDir(context: Context): List<VideoInfo> {
+        val out = mutableListOf<VideoInfo>()
+        val dir = File(context.getExternalFilesDir(null), "rotated")
+        if (!dir.exists() || !dir.isDirectory) return out
+        val files = dir.listFiles() ?: return out
+        for (file in files) {
+            if (!file.isFile) continue
+            val ext = file.extension.lowercase()
+            if (ext.isEmpty() || ext !in videoExtensions) continue
+            try {
+                val retriever = MediaMetadataRetriever()
+                retriever.setDataSource(file.absolutePath)
+                val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull() ?: 0L
+                val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                    ?.toIntOrNull() ?: 0
+                val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                    ?.toIntOrNull() ?: 0
+                val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    ?.toIntOrNull() ?: 0
+                retriever.release()
+                out.add(
+                    VideoInfo(
+                        uri = Uri.fromFile(file),
+                        displayName = file.name,
+                        duration = duration,
+                        width = width,
+                        height = height,
+                        size = file.length(),
+                        dateAdded = file.lastModified() / 1000,
+                        rotation = rotation
+                    )
+                )
+            } catch (_: Exception) {
+                // 单个文件无法读取时跳过
+            }
+        }
+        // 按日期倒序
+        return out.sortedByDescending { it.dateAdded }
     }
 
     private fun getFileFromUri(context: Context, uri: Uri): File? {

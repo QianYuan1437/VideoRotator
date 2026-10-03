@@ -476,6 +476,8 @@ private fun VideoCard(
                 )
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 三个 chip 强制单行（关闭 softWrap），避免
+                    // 横屏 / 竖屏标签因空间不足被竖向拆字。
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = PurpleLight
@@ -484,6 +486,8 @@ private fun VideoCard(
                             video.durationText,
                             fontSize = 12.sp,
                             color = PurpleDark,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                         )
                     }
@@ -496,6 +500,8 @@ private fun VideoCard(
                             video.resolution,
                             fontSize = 12.sp,
                             color = PurpleDark,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                         )
                     }
@@ -510,6 +516,8 @@ private fun VideoCard(
                                 fontSize = 12.sp,
                                 color = PurpleDark,
                                 fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                             )
                         }
@@ -519,7 +527,9 @@ private fun VideoCard(
                 Text(
                     video.sizeText,
                     fontSize = 12.sp,
-                    color = Color.Gray
+                    color = Color.Gray,
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
 

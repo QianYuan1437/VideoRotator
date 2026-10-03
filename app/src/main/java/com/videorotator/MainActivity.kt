@@ -184,6 +184,9 @@ fun MainScreen(
         converting != null -> ConvertScreen(
             videoInfo = converting,
             viewModel = convertViewModel,
+            pickedOutputTreeUri = pickedTreeUri,
+            onPickDirectory = onPickDirectory,
+            onClearPickedDirectory = onClearPickedDirectory,
             onBack = { convertingVideo = null },
             onConvertAnother = {
                 convertingVideo = null
@@ -207,7 +210,11 @@ fun MainScreen(
                     shadowElevation = 8.dp
                 ) {
                     Column(
-                        modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+                        modifier = Modifier
+                            // 给最外层 Surface 增加水平 padding，
+                            // 让最左侧 / 最右侧的 tab 离屏幕圆角有一段距离
+                            .padding(horizontal = 12.dp)
+                            .windowInsetsPadding(WindowInsets.navigationBars)
                     ) {
                         NavigationBar(
                             containerColor = Color.Transparent,
@@ -308,7 +315,7 @@ fun FileBrowserTab(
             val selected = fbViewModel.selectedVideos()
             if (selected.isNotEmpty()) {
                 selected.forEach { video ->
-                    convertViewModel.startJob(video, defaultOutputDir, 90)
+                    convertViewModel.startJob(video, defaultOutputDir, null, 90)
                 }
                 fbViewModel.exitSelectMode()
             }

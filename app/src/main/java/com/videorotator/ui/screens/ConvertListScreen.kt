@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -87,7 +89,10 @@ fun ConvertListScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.widthIn(max = 320.dp)
+                ) {
                     Icon(
                         Icons.Filled.PlayCircleOutline,
                         null,
@@ -105,7 +110,8 @@ fun ConvertListScreen(
                     Text(
                         "从视频列表进入播放器，点\u201c旋转90°转竖屏\u201d开始",
                         fontSize = 14.sp,
-                        color = Color.Gray.copy(alpha = 0.7f)
+                        color = Color.Gray.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center
                     )
                 }
             }

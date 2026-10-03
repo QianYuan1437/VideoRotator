@@ -60,10 +60,17 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
             try {
                 val context = getApplication<Application>()
                 val dir = _state.value.currentDirectory
-                val videos = withContext(Dispatchers.IO) {
+                val mediaStoreVideos = withContext(Dispatchers.IO) {
                     VideoUtils.scanVideos(context, dir)
                 }
-                rawVideos = videos
+                // 合并应用私有 /rotated 目录下的转换产物
+                // （MediaStore 默认不索引 Android/data/<pkg>/files/，需单独扫描）
+                val convertedVideos = withContext(Dispatchers.IO) {
+                    VideoUtils.scanConvertedDir(context)
+                }
+                // 按 uri 去重（同文件可能被两条路径都找到）
+                rawVideos = (mediaStoreVideos + convertedVideos)
+                    .distinctBy { it.uri.toString() }
                 applySort()
                 _state.value = _state.value.copy(isLoading = false)
             } catch (e: Exception) {
