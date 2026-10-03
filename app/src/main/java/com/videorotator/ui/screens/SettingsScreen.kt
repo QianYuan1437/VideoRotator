@@ -18,11 +18,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.AlertDialog
@@ -148,6 +151,40 @@ fun SettingsScreen(
                         )
                     }
                 }
+            }
+        }
+
+        // 语言设置
+        val context = LocalContext.current
+        var appLanguage by remember { mutableStateOf(PlayerPrefs.getLanguage(context)) }
+        SettingsSection(
+            icon = Icons.Filled.Language,
+            title = "语言",
+            description = "切换应用显示语言"
+        ) {
+            Column {
+                Text(
+                    "选择界面语言",
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 15.sp,
+                    color = PurpleDark
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "切换后会立即生效；选择「跟随系统」则使用设备当前语言",
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
+                Spacer(Modifier.height(12.dp))
+                LanguageSelector(
+                    current = appLanguage,
+                    onSelect = { tag ->
+                        if (tag == appLanguage) return@LanguageSelector
+                        appLanguage = tag
+                        PlayerPrefs.setLanguage(context, tag)
+                        applyLanguageAndRecreate(context, tag)
+                    }
+                )
             }
         }
 
@@ -704,4 +741,69 @@ private fun PrivacySection(title: String, body: String) {
             modifier = Modifier.padding(top = 2.dp)
         )
     }
+}
+
+// ============== 语言切换 ==============
+
+private data class LanguageOption(val tag: String, val label: String)
+
+private val languageOptions = listOf(
+    LanguageOption("zh", "中文"),
+    LanguageOption("en", "English"),
+    LanguageOption("", "跟随系统")
+)
+
+@Composable
+private fun LanguageSelector(current: String, onSelect: (String) -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = PurpleLight.copy(alpha = 0.5f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            languageOptions.forEach { opt ->
+                val selected = opt.tag.equals(current, ignoreCase = true)
+                Surface(
+                    onClick = { onSelect(opt.tag) },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (selected) PurplePrimary else androidx.compose.ui.graphics.Color.White,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier.padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            opt.label,
+                            fontSize = 14.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (selected) White else PurpleDark
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 应用语言切换：写入 PlayerPrefs + 通过 AppCompatDelegate 设置应用级 locale，
+ * Activity.recreate() 触发 Compose 重新加载字符串资源。
+ */
+private fun applyLanguageAndRecreate(context: android.content.Context, tag: String) {
+    AppCompatDelegate.setApplicationLocales(
+        androidx.core.os.LocaleListCompat.forLanguageTags(
+            when (tag) {
+                "zh" -> "zh-CN"
+                "en" -> "en"
+                else -> ""  // 跟随系统
+            }
+        )
+    )
+    (context as? ComponentActivity)?.recreate()
 }

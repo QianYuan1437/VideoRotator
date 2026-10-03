@@ -56,6 +56,7 @@ import com.videorotator.ui.screens.PlayerScreen
 import com.videorotator.ui.screens.SettingsScreen
 import com.videorotator.ui.theme.VideoRotatorTheme
 import com.videorotator.utils.PermissionUtils
+import com.videorotator.utils.PlayerPrefs
 import com.videorotator.utils.VideoInfo
 import com.videorotator.viewmodel.ConvertViewModel
 import com.videorotator.viewmodel.FileBrowserViewModel
@@ -98,6 +99,19 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 在 super.onCreate 之前按用户上次选择的应用语言设置 locale，
+        // Compose 渲染时就会加载对应 strings / 资源。
+        val savedLang = PlayerPrefs.getLanguage(this)
+        androidx.appcompat.app.AppCompatDelegate.setApplicationLocales(
+            androidx.core.os.LocaleListCompat.forLanguageTags(
+                when (savedLang) {
+                    "zh" -> "zh-CN"
+                    "en" -> "en"
+                    else -> ""
+                }
+            )
+        )
+
         super.onCreate(savedInstanceState)
 
         // 从 SharedPreferences 读取保存的设置

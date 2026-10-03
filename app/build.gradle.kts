@@ -75,6 +75,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.documentfile:documentfile:1.0.1")
 
+    // AppCompat：AppCompatDelegate.setApplicationLocales 用于切换应用语言
+    implementation("androidx.appcompat:appcompat:1.6.1")
+
     // Media3 ExoPlayer
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-ui:1.2.1")

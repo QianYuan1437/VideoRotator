@@ -56,12 +56,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Release Notes 改用当前 tag 指向的 commit message（commit message
+          # 已详列本版本的修复内容），不再使用固定文案。
+          NOTES=$(git log -1 --format='%B' "$GITHUB_REF_NAME")
+          echo "$NOTES" > /tmp/release-notes.md
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.apk --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file /tmp/release-notes.md
           else
             gh release create "$GITHUB_REF_NAME" dist/*.apk \
               --title "VideoRotator $GITHUB_REF_NAME" \
-              --notes "正式版本 $GITHUB_REF_NAME。Android 横屏视频转竖屏（纯旋转 90°，无裁切、无重编码）。"
+              --notes-file /tmp/release-notes.md
           fi
 
       - name: Publish rolling pre-release (main -> latest build)
@@ -69,6 +74,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 预发布说明也用最近一次提交的消息，便于查看每次 main 构建带的内容
+          NOTES=$(git log -1 --format='%B' "$GITHUB_SHA")
+          echo "$NOTES" > /tmp/release-notes.md
           if gh release view "latest" > /dev/null 2>&1; then
             # 删除历史构建资产，只保留本次产物，避免用户下载到过期 APK
             gh release view "latest" --json assets --jq '.assets[].name' \
@@ -76,9 +84,10 @@ jobs:
                   gh release delete-asset "latest" "$old" --yes || true
                 done
             gh release upload "latest" dist/*.apk --clobber
+            gh release edit "latest" --notes-file /tmp/release-notes.md
           else
             gh release create "latest" dist/*.apk \
               --prerelease \
               --title "Latest Build" \
-              --notes "main 分支最新自动构建（预发布）。正式版本请查看带 v* 标签的 Release。"
+              --notes-file /tmp/release-notes.md
           fi
