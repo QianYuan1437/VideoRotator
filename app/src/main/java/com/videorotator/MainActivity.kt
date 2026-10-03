@@ -172,7 +172,7 @@ fun MainScreen(
         TabItem("视频列表", Icons.Filled.Movie),
         TabItem("转换列表", Icons.Filled.History),
         TabItem("转换配置", Icons.Filled.Rotate90DegreesCw),
-        TabItem("设置", Icons.Filled.Settings)
+        TabItem("软件设置", Icons.Filled.Settings)
     )
     var selectedTab by remember { mutableIntStateOf(0) }
 

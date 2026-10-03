@@ -93,7 +93,7 @@ fun SettingsScreen(
     ) {
         // 标题
         Text(
-            "设置",
+            "软件设置",
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             color = PurpleDark,

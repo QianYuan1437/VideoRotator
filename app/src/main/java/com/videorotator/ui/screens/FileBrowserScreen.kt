@@ -195,16 +195,13 @@ private fun QuickDirectoryBar(
     selectedCount: Int,
     totalCount: Int
 ) {
-    Surface(
-        color = White,
-        shadowElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth()
+    // 不再使用 Surface + 投影包裹路径栏：去除白底卡片与底部分隔线，
+    // 让视频列表 tab 顶部与其他三个 tab 视觉一致。
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -356,7 +353,6 @@ private fun QuickDirectoryBar(
                 }
             }
         }
-    }
 }
 
 /** 快捷目录小标签（图标 + 文本） */
@@ -546,30 +542,31 @@ private fun VideoCard(
 }
 
 /**
- * 视频方向指示器：
- * - 竖屏（portrait）→ 竖长方形
+ * 视频方向指示器：用一块长方形表示横竖屏方向。
  * - 横屏（landscape）→ 横长方形
+ * - 竖屏（portrait）→ 竖长方形
  *
- * 容器宽 18dp 高 18dp，内部留 2dp 内边距，
- * 主体矩形宽度 14dp × 高度 8dp（横屏）或 8dp × 14dp（竖屏），
- * 整体高度与分辨率/时长 chip 一致。
+ * 容器采用与分辨率/时长 chip 完全一致的尺寸（RoundedCornerShape=12dp、
+ * padding=horizontal 8dp / vertical 2dp），让方向指示器在视觉上与其他
+ * chip 等同，避免尺寸不一致导致的卡片宽度被撑大或遮挡。
  */
 @Composable
 private fun OrientationIndicator(isLandscape: Boolean) {
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = if (isLandscape) PurplePrimary.copy(alpha = 0.2f) else PurpleLight,
-        modifier = Modifier.size(18.dp)
+        color = if (isLandscape) PurplePrimary.copy(alpha = 0.2f) else PurpleLight
     ) {
         Box(
-            modifier = Modifier.fillMaxSize().padding(2.dp),
+            modifier = Modifier
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+                .size(width = 18.dp, height = 14.dp),
             contentAlignment = Alignment.Center
         ) {
             Box(
                 modifier = Modifier
                     .size(
-                        width = if (isLandscape) 14.dp else 8.dp,
-                        height = if (isLandscape) 8.dp else 14.dp
+                        width = if (isLandscape) 18.dp else 5.dp,
+                        height = if (isLandscape) 5.dp else 18.dp
                     )
                     .clip(RoundedCornerShape(1.5.dp))
                     .background(PurpleDark)

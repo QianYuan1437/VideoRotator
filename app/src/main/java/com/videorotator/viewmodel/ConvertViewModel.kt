@@ -38,6 +38,12 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
     private val _jobs = MutableStateFlow<List<ConvertJob>>(emptyList())
     val jobs: StateFlow<List<ConvertJob>> = _jobs.asStateFlow()
 
+    private val _selectedJobIds = MutableStateFlow<Set<String>>(emptySet())
+    val selectedJobIds: StateFlow<Set<String>> = _selectedJobIds.asStateFlow()
+
+    private val _isSelectMode = MutableStateFlow(false)
+    val isSelectMode: StateFlow<Boolean> = _isSelectMode.asStateFlow()
+
     private val coroutineJobs = mutableMapOf<String, Job>()
 
     init {
@@ -64,6 +70,25 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
         appendJob(job)
         runJob(job)
         return id
+    }
+
+    /**
+     * 反向旋转：基于已有的成功任务，把度数取反后重新派发。
+     * 输出目录沿用原任务设置（File 或 SAF 树 URI）。
+     */
+    fun reverseRotateJob(id: String) {
+        val orig = _jobs.value.firstOrNull { it.id == id } ?: return
+        val reverseDegrees = (360 - orig.degrees) % 360
+        if (reverseDegrees == 0) reverseDegrees.coerceAtLeast(270) // 360 -> 270
+        // 派发新任务
+        startJob(
+            videoInfo = orig.videoInfo,
+            outputDir = orig.outputDir,
+            outputTreeUri = orig.outputTreeUri,
+            degrees = reverseDegrees.takeIf { it > 0 } ?: 270
+        )
+        // 删除原任务（避免列表里同时存在已转和反向转两条记录）
+        removeJob(id)
     }
 
     private fun runJob(job: ConvertJob) {
@@ -111,12 +136,74 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
 
     fun removeJob(id: String) {
         _jobs.value = _jobs.value.filter { it.id != id }
+        if (_selectedJobIds.value.contains(id)) {
+            _selectedJobIds.value = _selectedJobIds.value - id
+        }
+    }
+
+    /** 删除任务记录并删除已生成的输出文件 */
+    fun removeJobAndFile(id: String) {
+        val job = _jobs.value.firstOrNull { it.id == id }
+        if (job != null) {
+            deleteOutputFile(job)
+        }
+        removeJob(id)
+    }
+
+    /** 删除一组任务（多选） */
+    fun removeJobsAndFiles(ids: Set<String>) {
+        _jobs.value.filter { it.id in ids }.forEach { deleteOutputFile(it) }
+        _jobs.value = _jobs.value.filter { it.id !in ids }
+        _selectedJobIds.value = emptySet()
+    }
+
+    /** 仅删文件，保留任务记录（标 FAIL，方便用户追溯） */
+    fun removeFileOnly(id: String) {
+        val job = _jobs.value.firstOrNull { it.id == id } ?: return
+        deleteOutputFile(job)
+        updateJob(id) { it.copy(outputPath = null, state = JobState.FAILED, error = "输出文件已删除") }
+    }
+
+    private fun deleteOutputFile(job: ConvertJob) {
+        try {
+            job.outputPath?.let { File(it).delete() }
+            job.outputTreeUri?.let { uri ->
+                val context = getApplication<Application>()
+                val doc = androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)
+                doc?.delete()
+            }
+        } catch (_: Exception) {}
     }
 
     fun clearFinished() {
         _jobs.value = _jobs.value.filter {
             it.state == JobState.QUEUED || it.state == JobState.RUNNING
         }
+        _selectedJobIds.value = emptySet()
+    }
+
+    fun enterSelectMode(initialId: String? = null) {
+        _isSelectMode.value = true
+        _selectedJobIds.value = if (initialId != null) setOf(initialId) else emptySet()
+    }
+
+    fun exitSelectMode() {
+        _isSelectMode.value = false
+        _selectedJobIds.value = emptySet()
+    }
+
+    fun toggleSelect(id: String) {
+        val s = _selectedJobIds.value.toMutableSet()
+        if (s.contains(id)) s.remove(id) else s.add(id)
+        _selectedJobIds.value = s
+    }
+
+    fun selectAllJobs() {
+        _selectedJobIds.value = _jobs.value.map { it.id }.toSet()
+    }
+
+    fun deselectAllJobs() {
+        _selectedJobIds.value = emptySet()
     }
 
     private fun appendJob(job: ConvertJob) {
