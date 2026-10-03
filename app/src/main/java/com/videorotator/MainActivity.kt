@@ -4,12 +4,16 @@ import android.Manifest
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -34,6 +38,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -179,6 +184,16 @@ fun MainScreen(
 
     val playing = playingVideo
     val converting = convertingVideo
+    // 系统返回键：
+    //   - 在 ConvertScreen：先关闭 ConvertScreen，回到 PlayerScreen
+    //   - 在 PlayerScreen（且不在 ConvertScreen）：回到文件列表
+    //   - 在文件列表：交给系统默认（退出 Activity）
+    BackHandler(enabled = converting != null) {
+        convertingVideo = null
+    }
+    BackHandler(enabled = playing != null && converting == null) {
+        playingVideo = null
+    }
     when {
         // 转换页优先（从播放器进入后，返回则回到播放器）
         converting != null -> ConvertScreen(
@@ -211,16 +226,22 @@ fun MainScreen(
                 ) {
                     Column(
                         modifier = Modifier
-                            // 给最外层 Surface 增加水平 padding，
-                            // 让最左侧 / 最右侧的 tab 离屏幕圆角有一段距离
-                            .padding(horizontal = 12.dp)
+                            // 两侧各留 16dp，避免标签文字紧贴屏幕圆角
+                            // 同时通过 Box + Alignment.Center 让 NavigationBar
+                            // 内容在可视区域内居中，抵消底部圆角带来的视觉偏移
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
                             .windowInsetsPadding(WindowInsets.navigationBars)
                     ) {
-                        NavigationBar(
-                            containerColor = Color.Transparent,
-                            tonalElevation = 0.dp,
-                            windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp)
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center
                         ) {
+                            NavigationBar(
+                                containerColor = Color.Transparent,
+                                tonalElevation = 0.dp,
+                                windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp)
+                            ) {
                             tabs.forEachIndexed { index, tab ->
                                 NavigationBarItem(
                                     icon = {
@@ -244,6 +265,7 @@ fun MainScreen(
                                         indicatorColor = MaterialTheme.colorScheme.primaryContainer
                                     )
                                 )
+                            }
                             }
                         }
                     }
@@ -321,7 +343,8 @@ fun FileBrowserTab(
             }
         },
         onJumpToLastPlayed = { fbViewModel.jumpToLastPlayedParent() },
-        onPickDirectory = onPickDirectory
+        onPickDirectory = onPickDirectory,
+        onConsumeLastPlayedUri = { fbViewModel.consumeLastPlayedUri() }
     )
 }
 

@@ -260,7 +260,12 @@ fun ConvertScreen(
             selectedPath = selectedPath,
             useCustomPath = useCustomPath,
             pickedOutputTreeUri = pickedOutputTreeUri,
-            onPickDirectory = onPickDirectory,
+            onPickDirectory = {
+                // 用户希望点选"自定义路径"后立刻唤起 SAF，而不是再走一次确定按钮
+                useCustomPath = true
+                showPathDialog = false
+                onPickDirectory()
+            },
             onPathSelected = { path, isCustom ->
                 if (isCustom) {
                     useCustomPath = true
@@ -272,7 +277,6 @@ fun ConvertScreen(
             onDismiss = { showPathDialog = false },
             onConfirm = {
                 if (useCustomPath && pickedOutputTreeUri == null) {
-                    // 选了自定义但还没选目录，自动打开选择器
                     onPickDirectory()
                 } else {
                     showPathDialog = false

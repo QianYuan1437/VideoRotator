@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
@@ -95,6 +96,7 @@ fun FileBrowserScreen(
     onBatchConvert: () -> Unit,
     onJumpToLastPlayed: () -> Unit,
     onPickDirectory: () -> Unit,
+    onConsumeLastPlayedUri: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -139,7 +141,19 @@ fun FileBrowserScreen(
                     onExitSelectMode = onExitSelectMode
                 )
             }
+            // 用 LazyListState 记住滚动位置；从播放器返回时回到原视频卡片
+            val listState = rememberLazyListState()
+            val lastPlayedUri = state.lastPlayedVideoUri
+            LaunchedEffect(lastPlayedUri, state.videos.size) {
+                val uri = lastPlayedUri ?: return@LaunchedEffect
+                val idx = state.videos.indexOfFirst { it.uri.toString() == uri }
+                if (idx >= 0) {
+                    listState.animateScrollToItem(idx)
+                    onConsumeLastPlayedUri()
+                }
+            }
             LazyColumn(
+                state = listState,
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
@@ -470,14 +484,15 @@ private fun VideoCard(
                 Text(
                     text = video.displayName,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp,
-                    maxLines = 2,
+                    // 缩小字号给 chip 留出空间，避免名称被截断
+                    fontSize = 13.sp,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 三个 chip 强制单行（关闭 softWrap），避免
-                    // 横屏 / 竖屏标签因空间不足被竖向拆字。
+                    // 三个 chip + 一个方向指示器，强制单行（关闭 softWrap），
+                    // 避免横屏 / 竖屏长方形被竖向拆字或被遮挡。
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = PurpleLight
@@ -505,23 +520,10 @@ private fun VideoCard(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                         )
                     }
-                    if (video.isLandscape) {
-                        Spacer(Modifier.width(6.dp))
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = PurplePrimary.copy(alpha = 0.2f)
-                        ) {
-                            Text(
-                                "横屏",
-                                fontSize = 12.sp,
-                                color = PurpleDark,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                softWrap = false,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
+                    Spacer(Modifier.width(6.dp))
+                    // 方向指示器：用一块长方形代替"横屏"文字。
+                    // 横屏 = 横长方形，竖屏 = 竖长方形，方向箭头长度与分辨率/时长 chip 视觉对齐。
+                    OrientationIndicator(isLandscape = video.isLandscape)
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -539,6 +541,39 @@ private fun VideoCard(
                     onCheckedChange = { onToggleSelect() }
                 )
             }
+        }
+    }
+}
+
+/**
+ * 视频方向指示器：
+ * - 竖屏（portrait）→ 竖长方形
+ * - 横屏（landscape）→ 横长方形
+ *
+ * 容器宽 18dp 高 18dp，内部留 2dp 内边距，
+ * 主体矩形宽度 14dp × 高度 8dp（横屏）或 8dp × 14dp（竖屏），
+ * 整体高度与分辨率/时长 chip 一致。
+ */
+@Composable
+private fun OrientationIndicator(isLandscape: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (isLandscape) PurplePrimary.copy(alpha = 0.2f) else PurpleLight,
+        modifier = Modifier.size(18.dp)
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize().padding(2.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(
+                        width = if (isLandscape) 14.dp else 8.dp,
+                        height = if (isLandscape) 8.dp else 14.dp
+                    )
+                    .clip(RoundedCornerShape(1.5.dp))
+                    .background(PurpleDark)
+            )
         }
     }
 }

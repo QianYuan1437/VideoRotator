@@ -33,7 +33,9 @@ data class FileBrowserState(
     val isSelectMode: Boolean = false,
     val selectedUris: Set<String> = emptySet(),
     val lastPlayedParent: String? = null,
-    val pickedTreeUri: Uri? = null
+    val pickedTreeUri: Uri? = null,
+    // 记录最近播放的视频 URI，回到列表时定位滚动到该卡片
+    val lastPlayedVideoUri: String? = null
 )
 
 class FileBrowserViewModel(application: Application) : AndroidViewModel(application) {
@@ -157,6 +159,15 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
         val parent = VideoUtils.getParentPath(getApplication(), uri) ?: return
         if (_state.value.lastPlayedParent != parent) {
             _state.value = _state.value.copy(lastPlayedParent = parent)
+        }
+        // 同时记录 URI，供回到列表时定位滚动
+        _state.value = _state.value.copy(lastPlayedVideoUri = uri.toString())
+    }
+
+    /** UI 已消费完滚动定位，清除标记避免重复滚动 */
+    fun consumeLastPlayedUri() {
+        if (_state.value.lastPlayedVideoUri != null) {
+            _state.value = _state.value.copy(lastPlayedVideoUri = null)
         }
     }
 
