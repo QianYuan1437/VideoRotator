@@ -215,4 +215,17 @@
     <string name="notif_running_text">剩余 %1$d 个任务</string>
     <string name="notif_done">转换完成</string>
     <string name="notif_failed">转换失败</string>
+    <string name="badge_queued">转换中</string>
+    <string name="batch_added_skipped">已加入 %1$d 个转换任务，跳过 %2$d 个已转换 / 排队中的视频</string>
+    <string name="batch_none">所选视频都已转换过或已在队列中</string>
+    <string name="already_queued">该视频已在转换队列中</string>
+    <string name="convert_will_replace">已按此方向转换过，将替换之前的转换结果</string>
+    <string name="snack_done_one">转换完成：%1$s</string>
+    <string name="snack_failed_one">转换失败：%1$s</string>
+    <string name="snack_done_many">%1$d 个视频转换完成</string>
+    <string name="snack_done_with_failed">%1$d 个转换完成，%2$d 个失败</string>
+    <string name="retry">重试</string>
+    <string name="view">查看</string>
+    <string name="perm_open_settings">视频读取权限已被拒绝，请在系统设置中开启</string>
+    <string name="delete_both_msg">将删除任务记录和视频文件「%1$s」，此操作无法撤销。原视频不受影响。</string>
 </resources>

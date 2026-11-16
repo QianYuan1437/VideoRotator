@@ -1,5 +1,6 @@
 package com.videorotator.ui.components
 
+import androidx.compose.material.icons.filled.HourglassTop
 import com.videorotator.R
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
@@ -79,6 +80,7 @@ fun OrientationIndicator(isLandscape: Boolean) {
 
 /**
  * 缩略图左上角的转换标识：
+ *  - 在转换队列中：灰色「转换中」
  *  - 已转换的原视频：绿色「已转换」
  *  - 转换产物：主题色「转换产物」+ 角度
  */
@@ -86,11 +88,18 @@ fun OrientationIndicator(isLandscape: Boolean) {
 fun ConvertBadge(mark: ConvertMark, degrees: Int?, modifier: Modifier = Modifier) {
     if (mark == ConvertMark.NONE) return
     val isOutput = mark == ConvertMark.OUTPUT
-    val bg: Color = if (isOutput) PurplePrimary else ConvertedGreen
+    val bg: Color = when (mark) {
+        ConvertMark.OUTPUT -> PurplePrimary
+        ConvertMark.QUEUED -> Color(0xFF757575)
+        else -> ConvertedGreen
+    }
     val fg: Color = if (isOutput) OnPrimary else Color.White
-    val label = if (isOutput) {
-        stringResource(R.string.badge_output) + (degrees?.let { " ${if (it == 270) "↺" else "↻"}${if (it == 270) 90 else it}°" } ?: "")
-    } else stringResource(R.string.badge_converted)
+    val label = when (mark) {
+        ConvertMark.OUTPUT -> stringResource(R.string.badge_output) +
+            (degrees?.let { " ${if (it == 270) "↺" else "↻"}${if (it == 270) 90 else it}°" } ?: "")
+        ConvertMark.QUEUED -> stringResource(R.string.badge_queued)
+        else -> stringResource(R.string.badge_converted)
+    }
     Surface(
         shape = RoundedCornerShape(topStart = 12.dp, bottomEnd = 10.dp),
         color = bg.copy(alpha = 0.92f),
@@ -101,7 +110,11 @@ fun ConvertBadge(mark: ConvertMark, degrees: Int?, modifier: Modifier = Modifier
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                if (isOutput) Icons.Filled.Rotate90DegreesCw else Icons.Filled.CheckCircle,
+                when (mark) {
+                    ConvertMark.OUTPUT -> Icons.Filled.Rotate90DegreesCw
+                    ConvertMark.QUEUED -> Icons.Filled.HourglassTop
+                    else -> Icons.Filled.CheckCircle
+                },
                 null,
                 tint = fg,
                 modifier = Modifier.size(11.dp)

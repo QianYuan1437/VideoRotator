@@ -7,6 +7,8 @@ import com.videorotator.viewmodel.VideoFilter
 enum class ConvertMark {
     /** 未转换 */
     NONE,
+    /** 在转换队列中（等待 / 转换中） */
+    QUEUED,
     /** 原视频，已经转换过（存在成功任务或同名产物） */
     SOURCE_CONVERTED,
     /** 本身就是转换产物 */
@@ -22,24 +24,24 @@ data class MarkedVideo(
 
 object VideoMarks {
 
+    private val DEGREES_IN_NAME = Regex("""_rotated_(\d+)deg""")
+
+    /** 已完成转换（筛选「已转换」）：原视频已转过，或本身是产物 */
+    val ConvertMark.isConverted: Boolean get() = this == ConvertMark.SOURCE_CONVERTED || this == ConvertMark.OUTPUT
+
     /**
-     * 给列表中的视频打上转换标识，并按筛选 / 去重规则过滤。
+     * 给列表中的视频打上转换标识。
      *
      * 识别规则（任务记录被清空后仍然有效）：
      *  - 产物：路径 / uri 与成功任务的输出一致，或文件名形如 <原名>_rotated_<度数>deg.mp4
      *  - 已转换原视频：uri 与成功任务的源视频一致，或列表里存在它的同名产物
-     *
-     * 去重：
-     *  - 原视频与其产物同时出现时只保留原视频（卡片上显示「已转换」）
-     *  - 同名、同大小、同时长的重复文件（不同目录里的拷贝）只保留一份
+     *  - 队列中：有等待 / 进行中的任务以它为源
      */
     fun mark(
         videos: List<VideoInfo>,
-        jobs: List<ConvertJob>,
-        filter: VideoFilter,
-        dedupe: Boolean
+        success: List<ConvertJob>,
+        activeSourceUris: Set<String>
     ): List<MarkedVideo> {
-        val success = jobs.filter { it.hasOutput }
         val outputPaths = success.mapNotNull { it.outputPath }.toHashSet()
         val outputUris = success.mapNotNull { it.outputUri?.toString() }.toSet()
         val degreesByOutput = HashMap<String, Int>()
@@ -60,33 +62,36 @@ object VideoMarks {
             VideoUtils.sourceBaseNameOf(v.displayName)?.let { outputSourceNames.add(it.lowercase()) }
         }
 
-        val marked = videos.map { v ->
+        return videos.map { v ->
             val key = v.uri.toString()
             when {
                 isOutput(v) -> MarkedVideo(
                     v, ConvertMark.OUTPUT,
                     // 文件名里是相对原视频的净角度，优先于任务角度（对产物反向时任务角度是 180）
-                    Regex("""_rotated_(\d+)deg""").find(v.displayName)?.groupValues?.get(1)?.toIntOrNull()
+                    DEGREES_IN_NAME.find(v.displayName)?.groupValues?.get(1)?.toIntOrNull()
                         ?: degreesByOutput[v.path] ?: degreesByOutput[key]
                 )
+                key in activeSourceUris -> MarkedVideo(v, ConvertMark.QUEUED)
                 key in degreesBySource -> MarkedVideo(v, ConvertMark.SOURCE_CONVERTED, degreesBySource[key])
                 v.displayName.substringBeforeLast('.').lowercase() in outputSourceNames ->
                     MarkedVideo(v, ConvertMark.SOURCE_CONVERTED)
                 else -> MarkedVideo(v, ConvertMark.NONE)
             }
         }
+    }
 
-        var result = when (filter) {
-            VideoFilter.ALL -> marked
-            VideoFilter.UNCONVERTED -> marked.filter { it.mark == ConvertMark.NONE }
-            VideoFilter.CONVERTED -> marked.filter { it.mark != ConvertMark.NONE }
-        }
-
-        if (dedupe) {
+    /**
+     * 去重：
+     *  - 原视频与其产物同时出现时只保留原视频（卡片上显示「已转换」）
+     *  - 同名、同大小、同时长的重复文件（不同目录里的拷贝）只保留一份
+     */
+    fun dedupe(marked: List<MarkedVideo>, success: List<ConvertJob>, enabled: Boolean): List<MarkedVideo> {
+        var result = marked
+        if (enabled) {
             val sourceNames = marked.filter { it.mark != ConvertMark.OUTPUT }
                 .map { it.video.displayName.substringBeforeLast('.').lowercase() }
                 .toSet()
-            val sourceUris = marked.filter { it.mark == ConvertMark.SOURCE_CONVERTED }
+            val sourceUris = marked.filter { it.mark != ConvertMark.OUTPUT }
                 .map { it.video.uri.toString() }.toSet()
             val sourceOfOutput = HashMap<String, String>()
             success.forEach { job ->
@@ -104,5 +109,11 @@ object VideoMarks {
             result = result.distinctBy { Triple(it.video.displayName.lowercase(), it.video.size, it.video.duration / 1000) }
         }
         return result
+    }
+
+    fun filter(marked: List<MarkedVideo>, filter: VideoFilter): List<MarkedVideo> = when (filter) {
+        VideoFilter.ALL -> marked
+        VideoFilter.UNCONVERTED -> marked.filter { !it.mark.isConverted }
+        VideoFilter.CONVERTED -> marked.filter { it.mark.isConverted }
     }
 }

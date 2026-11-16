@@ -64,17 +64,17 @@
     <string name="no_videos_desc">Make sure this folder contains videos</string>
     <string name="load_failed">Failed to load</string>
     <string name="batch_convert">Convert %1$d</string>
-    <string name="batch_added">Added %1$d conversion jobs</string>
+    <string name="batch_added">Conversions queued: %1$d</string>
     <string name="badge_converted">Converted</string>
     <string name="badge_output">Output</string>
     <string name="tab_progress">In progress</string>
     <string name="tab_converted">Converted</string>
     <string name="clear_finished">Clear finished</string>
     <string name="clear_finished_title">Clear finished jobs</string>
-    <string name="clear_finished_msg">Only the job records are removed. Converted videos are kept and still listed under "Converted".</string>
+    <string name="clear_finished_msg">Only the job records are removed. Converted videos are kept and still listed under \"Converted\".</string>
     <string name="clear_action">Clear</string>
     <string name="no_jobs">No conversion jobs</string>
-    <string name="no_jobs_desc">Open a video and tap "Rotate to portrait", or long-press to select several and convert in batch</string>
+    <string name="no_jobs_desc">Open a video and tap \"Rotate to portrait\", or long-press to select several and convert in batch</string>
     <string name="delete_jobs_title">Delete %1$d jobs</string>
     <string name="delete_jobs_also_files">Also delete the converted videos</string>
     <string name="delete_selected">Delete</string>
@@ -98,7 +98,7 @@
     <string name="no_converted">No converted videos yet</string>
     <string name="no_converted_desc">Converted videos appear here, including those saved to Movies / DCIM / custom folders</string>
     <string name="delete_file_title">Delete video file</string>
-    <string name="delete_file_msg">"%1$s" will be deleted from this device. This can\'t be undone. The original video is not affected.</string>
+    <string name="delete_file_msg">\"%1$s\" will be deleted from this device. This can\'t be undone. The original video is not affected.</string>
     <string name="reverse_title">Reverse rotation</string>
     <string name="reverse_msg">Currently %1$s. The original video will be converted again as %2$s and replace this file.</string>
     <string name="reverse_msg_file">This video will be rotated another 180° (the opposite direction) and replace this file.</string>
@@ -157,7 +157,7 @@
     <string name="language">Language</string>
     <string name="language_desc">Change the app language</string>
     <string name="language_choose">Display language</string>
-    <string name="language_hint">Takes effect immediately. "System" follows the device language.</string>
+    <string name="language_hint">Takes effect immediately. \"System\" follows the device language.</string>
     <string name="language_zh">中文</string>
     <string name="language_en">English</string>
     <string name="language_system">System</string>
@@ -214,4 +214,17 @@
     <string name="notif_running_text">%1$d jobs remaining</string>
     <string name="notif_done">Conversion finished</string>
     <string name="notif_failed">Conversion failed</string>
+    <string name="badge_queued">Converting</string>
+    <string name="batch_added_skipped">Queued: %1$d. Skipped: %2$d (already converted or queued)</string>
+    <string name="batch_none">All selected videos are already converted or queued</string>
+    <string name="already_queued">This video is already in the queue</string>
+    <string name="convert_will_replace">Already converted this way; the previous result will be replaced</string>
+    <string name="snack_done_one">Converted: %1$s</string>
+    <string name="snack_failed_one">Conversion failed: %1$s</string>
+    <string name="snack_done_many">%1$d videos converted</string>
+    <string name="snack_done_with_failed">%1$d converted, %2$d failed</string>
+    <string name="retry">Retry</string>
+    <string name="view">View</string>
+    <string name="perm_open_settings">Video access was denied. Please allow it in system settings.</string>
+    <string name="delete_both_msg">The record and the file \"%1$s\" will be deleted. This can\'t be undone. The original video is not affected.</string>
 </resources>

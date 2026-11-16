@@ -18,6 +18,7 @@ object AppPrefs {
     private const val KEY_NOTIFY = "notify_on_complete"
     private const val KEY_LIST_FILTER = "video_list_filter"
     private const val KEY_LIST_DEDUPE = "video_list_dedupe"
+    private const val KEY_ASKED_PREFIX = "permission_asked_"
 
     private fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -64,6 +65,14 @@ object AppPrefs {
 
     fun setListFilter(context: Context, name: String) {
         prefs(context).edit().putString(KEY_LIST_FILTER, name).apply()
+    }
+
+    /** 是否申请过某个运行时权限（区分「从未申请」与「已被永久拒绝」，后者要去系统设置开启） */
+    fun wasPermissionAsked(context: Context, permission: String): Boolean =
+        prefs(context).getBoolean(KEY_ASKED_PREFIX + permission, false)
+
+    fun setPermissionAsked(context: Context, permission: String) {
+        prefs(context).edit().putBoolean(KEY_ASKED_PREFIX + permission, true).apply()
     }
 
     fun getListDedupe(context: Context): Boolean = prefs(context).getBoolean(KEY_LIST_DEDUPE, false)

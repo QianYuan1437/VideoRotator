@@ -1,5 +1,7 @@
 package com.videorotator.ui.screens
 
+import androidx.compose.runtime.collectAsState
+import android.widget.Toast
 import com.videorotator.R
 import androidx.compose.ui.res.stringResource
 import android.net.Uri
@@ -105,6 +107,11 @@ fun ConvertScreen(
     }
 
     val targetPath = targetPath(context, target, outputTreeUri)
+    // 已有相同参数的产物时提示「将替换」，避免以为会多出一份
+    val successJobs by viewModel.successJobs.collectAsState()
+    val willReplace = remember(successJobs, target, outputTreeUri, clockwise) {
+        viewModel.hasSameOutput(videoInfo, target, outputTreeUri, if (clockwise) 90 else 270)
+    }
 
     Scaffold(
         topBar = {
@@ -225,15 +232,28 @@ fun ConvertScreen(
                 }
             }
 
-            // 开始转换：派发到任务队列后跳转到「转换列表」查看实时进度
+            if (willReplace) {
+                Text(
+                    stringResource(R.string.convert_will_replace),
+                    fontSize = 13.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+                )
+            }
+
+            // 开始转换：派发到任务队列后跳转到「转换列表」查看实时进度；
+            // 同一任务已在队列中（如连点）时不重复加入
             Button(
                 onClick = {
-                    viewModel.startJob(
+                    val id = viewModel.startJob(
                         videoInfo = videoInfo,
                         target = target,
                         outputTreeUri = if (target == OutputTarget.CUSTOM) outputTreeUri else null,
                         degrees = if (clockwise) 90 else 270
                     )
+                    if (id == null) {
+                        Toast.makeText(context, R.string.already_queued, Toast.LENGTH_SHORT).show()
+                    }
                     onStarted()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),

@@ -184,7 +184,11 @@ object VideoUtils {
      *    写完立即出现在视频列表 / 相册），更早版本直接写文件后通知媒体扫描
      *  - 其他：应用私有目录 /Android/data/<pkg>/files/rotated
      *
+     * 新产物先写在旁边（临时名 / 系统自动改名），成功后才删除同名旧产物并改回正式名：
+     * 重复转换失败或被取消时，之前的产物不受影响。
+     *
      * @param checkCancelled 在复制样本的循环中调用，抛出 CancellationException 即中止并清理半成品
+     * @param onOutputCreated 输出文件一创建就回调其 uri，调用方据此在进程被杀后清理半成品
      */
     fun rotateVideo(
         context: Context,
@@ -193,6 +197,7 @@ object VideoUtils {
         target: OutputTarget,
         outputTreeUri: Uri? = null,
         checkCancelled: () -> Unit = {},
+        onOutputCreated: (Uri) -> Unit = {},
         onProgress: (Float) -> Unit = {}
     ): Result<RotateOutput> {
         val inputName = queryDisplayName(context, input.uri) ?: input.displayName
@@ -202,21 +207,19 @@ object VideoUtils {
             val net = ((m.groupValues[2].toIntOrNull() ?: 0) + degrees) % 360
             outputNameFor(m.groupValues[1], net)
         } ?: outputNameFor(inputName.substringBeforeLast('.').ifBlank { "video" }, degrees)
+        val io = RotateIo(checkCancelled, onOutputCreated, onProgress)
         return try {
             when {
                 outputTreeUri != null ->
-                    rotateToTree(context, input.uri, degrees, outputTreeUri, outputName, checkCancelled, onProgress)
+                    rotateToTree(context, input.uri, degrees, outputTreeUri, outputName, io)
                 target.publicDir != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
-                    rotateToMediaStore(context, input.uri, degrees, target, outputName, checkCancelled, onProgress)
+                    rotateToMediaStore(context, input.uri, degrees, target, outputName, io)
                 target.publicDir != null -> {
                     @Suppress("DEPRECATION")
                     val dir = Environment.getExternalStoragePublicDirectory(target.publicDir)
-                    rotateToFile(context, input.uri, degrees, dir, outputName, true, checkCancelled, onProgress)
+                    rotateToFile(context, input.uri, degrees, dir, outputName, true, io)
                 }
-                else -> rotateToFile(
-                    context, input.uri, degrees, privateOutputDir(context), outputName, false,
-                    checkCancelled, onProgress
-                )
+                else -> rotateToFile(context, input.uri, degrees, privateOutputDir(context), outputName, false, io)
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -227,6 +230,24 @@ object VideoUtils {
 
     fun privateOutputDir(context: Context): File = File(context.getExternalFilesDir(null), "rotated")
 
+    private class RotateIo(
+        val checkCancelled: () -> Unit,
+        val onOutputCreated: (Uri) -> Unit,
+        val onProgress: (Float) -> Unit
+    )
+
+    private const val PART_SUFFIX = ".part"
+    private const val LEGACY_TMP_NAME = "rotate_tmp.mp4"
+
+    /**
+     * 清理进程被杀时遗留的半成品：私有 / 公共目录中的 .part 文件、Android 7 的临时文件。
+     * MediaStore / SAF 中的半成品由调用方按 onOutputCreated 记录的 uri 删除。
+     */
+    fun cleanupLeftovers(context: Context) {
+        File(context.cacheDir, LEGACY_TMP_NAME).delete()
+        privateOutputDir(context).listFiles()?.forEach { if (it.name.endsWith(PART_SUFFIX)) it.delete() }
+    }
+
     private fun rotateToFile(
         context: Context,
         inputUri: Uri,
@@ -234,21 +255,24 @@ object VideoUtils {
         targetDir: File,
         outputName: String,
         scanAfter: Boolean,
-        checkCancelled: () -> Unit,
-        onProgress: (Float) -> Unit
+        io: RotateIo
     ): Result<RotateOutput> {
         if (!targetDir.exists() && !targetDir.mkdirs()) {
             return Result.failure(ConvertError(JobErrors.NO_OUTPUT_DIR))
         }
         val outputFile = File(targetDir, outputName)
-        if (outputFile.exists()) outputFile.delete()
+        val partFile = File(targetDir, outputName + PART_SUFFIX)
+        partFile.delete()
+        io.onOutputCreated(Uri.fromFile(partFile))
         var ok = false
         try {
-            doRotate(context, inputUri, null, outputFile.absolutePath, degrees, checkCancelled, onProgress)
-            ok = true
+            doRotate(context, inputUri, null, partFile.absolutePath, degrees, io)
+            if (outputFile.exists()) outputFile.delete()
+            ok = partFile.renameTo(outputFile)
         } finally {
-            if (!ok) outputFile.delete()
+            if (!ok) partFile.delete()
         }
+        if (!ok) return Result.failure(ConvertError(JobErrors.CREATE_FILE))
         if (scanAfter) {
             // 等媒体扫描完成再返回，否则视频列表随即重扫时还查不到新文件
             val latch = java.util.concurrent.CountDownLatch(1)
@@ -267,8 +291,7 @@ object VideoUtils {
         degrees: Int,
         target: OutputTarget,
         outputName: String,
-        checkCancelled: () -> Unit,
-        onProgress: (Float) -> Unit
+        io: RotateIo
     ): Result<RotateOutput> {
         val resolver = context.contentResolver
         val isDownload = target == OutputTarget.DOWNLOAD
@@ -279,18 +302,16 @@ object VideoUtils {
         }
         val relativePath = target.publicDir + "/"
 
-        // 移除本应用之前生成的同名文件（非本应用创建的文件删不掉，MediaStore 会自动改名）
-        try {
+        // 本应用之前生成的同名文件：新文件写成功后再删除（同名时 MediaStore 会先给新文件自动改名）
+        val oldUris = try {
             resolver.query(
                 collection, arrayOf(MediaStore.MediaColumns._ID),
                 "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=?",
                 arrayOf(relativePath, outputName), null
             )?.use { c ->
-                while (c.moveToNext()) {
-                    runCatching { resolver.delete(Uri.withAppendedPath(collection, c.getLong(0).toString()), null, null) }
-                }
-            }
-        } catch (_: Exception) {}
+                buildList { while (c.moveToNext()) add(Uri.withAppendedPath(collection, c.getLong(0).toString())) }
+            } ?: emptyList()
+        } catch (_: Exception) { emptyList() }
 
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, outputName)
@@ -300,17 +321,28 @@ object VideoUtils {
         }
         val outUri = resolver.insert(collection, values)
             ?: return Result.failure(ConvertError(JobErrors.CREATE_FILE))
+        io.onOutputCreated(outUri)
         var ok = false
         try {
             resolver.openFileDescriptor(outUri, "rw")?.use { pfd ->
-                doRotate(context, inputUri, pfd.fileDescriptor, null, degrees, checkCancelled, onProgress)
+                doRotate(context, inputUri, pfd.fileDescriptor, null, degrees, io)
             } ?: return Result.failure(ConvertError(JobErrors.OPEN_OUTPUT))
+            oldUris.forEach { runCatching { resolver.delete(it, null, null) } }
+            if (oldUris.isNotEmpty()) {
+                // 旧文件删除后改回正式文件名；失败时保留系统给的自动改名
+                runCatching {
+                    resolver.update(outUri, ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, outputName)
+                    }, null, null)
+                }
+            }
             resolver.update(outUri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
             ok = true
         } finally {
             if (!ok) runCatching { resolver.delete(outUri, null, null) }
         }
         // 视频列表按 DATA 路径匹配转换产物，这里查出实际落盘路径（可能被自动改名）
+        @Suppress("DEPRECATION")
         val path = queryDataPath(context, outUri)
             ?: File(Environment.getExternalStoragePublicDirectory(target.publicDir), outputName).absolutePath
         // 视频列表扫描用的是 external 卷 + Video 集合的 uri，这里统一成同样的形式，便于按 uri 匹配产物
@@ -328,22 +360,28 @@ object VideoUtils {
         degrees: Int,
         outputTreeUri: Uri,
         outputName: String,
-        checkCancelled: () -> Unit,
-        onProgress: (Float) -> Unit
+        io: RotateIo
     ): Result<RotateOutput> {
         val tree = DocumentFile.fromTreeUri(context, outputTreeUri)
             ?: return Result.failure(ConvertError(JobErrors.TREE_ACCESS))
         if (!tree.canWrite()) return Result.failure(ConvertError(JobErrors.TREE_WRITE))
 
-        tree.findFile(outputName)?.delete()
+        // 同名旧产物在新文件写成功后再删除（同名时文档提供方会先给新文件自动改名）
+        val oldDoc = tree.findFile(outputName)
         val outputDoc = tree.createFile("video/mp4", outputName)
             ?: return Result.failure(ConvertError(JobErrors.CREATE_FILE))
+        io.onOutputCreated(outputDoc.uri)
+        fun replaceOld() {
+            if (oldDoc != null && oldDoc.uri != outputDoc.uri && oldDoc.delete()) {
+                runCatching { outputDoc.renameTo(outputName) }
+            }
+        }
         var ok = false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             // Android 7.x 的 MediaMuxer 不支持写入 FileDescriptor：先写临时文件再拷贝到所选文件夹
-            val tmp = File(context.cacheDir, "rotate_tmp.mp4")
+            val tmp = File(context.cacheDir, LEGACY_TMP_NAME)
             try {
-                doRotate(context, inputUri, null, tmp.absolutePath, degrees, checkCancelled, onProgress)
+                doRotate(context, inputUri, null, tmp.absolutePath, degrees, io)
                 context.contentResolver.openOutputStream(outputDoc.uri, "w")?.use { out ->
                     tmp.inputStream().use { it.copyTo(out) }
                 } ?: return Result.failure(ConvertError(JobErrors.OPEN_OUTPUT))
@@ -352,6 +390,7 @@ object VideoUtils {
                 tmp.delete()
                 if (!ok) runCatching { outputDoc.delete() }
             }
+            replaceOld()
             return Result.success(RotateOutput(treeDocumentPath(outputDoc.uri), outputDoc.uri))
         }
         try {
@@ -362,12 +401,13 @@ object VideoUtils {
                 context.contentResolver.openFileDescriptor(outputDoc.uri, "w")
             }
             outPfd?.use { pfd ->
-                doRotate(context, inputUri, pfd.fileDescriptor, null, degrees, checkCancelled, onProgress)
+                doRotate(context, inputUri, pfd.fileDescriptor, null, degrees, io)
             } ?: return Result.failure(ConvertError(JobErrors.OPEN_OUTPUT))
             ok = true
         } finally {
             if (!ok) runCatching { outputDoc.delete() }
         }
+        replaceOld()
         val path = treeDocumentPath(outputDoc.uri)
         return Result.success(RotateOutput(path, outputDoc.uri))
     }
@@ -383,9 +423,10 @@ object VideoUtils {
         outputFileDescriptor: java.io.FileDescriptor?,
         outputFilePath: String?,
         degrees: Int,
-        checkCancelled: () -> Unit,
-        onProgress: (Float) -> Unit
+        io: RotateIo
     ) {
+        val checkCancelled = io.checkCancelled
+        val onProgress = io.onProgress
         val extractor = MediaExtractor()
         var muxer: MediaMuxer? = null
         var muxerStarted = false
@@ -399,9 +440,8 @@ object VideoUtils {
                 MediaMuxer(outputFilePath!!, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             }
 
-            val newRotation = ((getRotation(context, inputUri) + degrees) % 360 + 360) % 360
-
             val trackIndexMap = mutableMapOf<Int, Int>()
+            var sourceRotation: Int? = null
             var maxSampleSize = 1024 * 1024
             var durationUs = 0L
             for (i in 0 until extractor.trackCount) {
@@ -416,11 +456,16 @@ object VideoUtils {
                     if (format.containsKey(MediaFormat.KEY_DURATION)) {
                         durationUs = maxOf(durationUs, format.getLong(MediaFormat.KEY_DURATION))
                     }
+                    // 视频轨格式里已带旋转角，无需再开一个 MediaMetadataRetriever 解析
+                    if (mime.startsWith("video/") && sourceRotation == null && format.containsKey(MediaFormat.KEY_ROTATION)) {
+                        sourceRotation = format.getInteger(MediaFormat.KEY_ROTATION)
+                    }
                 }
             }
             if (trackIndexMap.isEmpty()) throw ConvertError(JobErrors.NO_TRACKS)
 
-            muxer.setOrientationHint(newRotation)
+            val baseRotation = sourceRotation ?: getRotation(context, inputUri)
+            muxer.setOrientationHint(((baseRotation + degrees) % 360 + 360) % 360)
             muxer.start()
             muxerStarted = true
             onProgress(0.02f)
@@ -563,13 +608,22 @@ object VideoUtils {
     fun scanConvertedDir(context: Context): List<VideoInfo> {
         val dir = privateOutputDir(context)
         val files = dir.listFiles() ?: return emptyList()
-        return files
+        val result = files
             .filter { it.isFile && it.extension.lowercase() in videoExtensions }
             .mapNotNull { file ->
-                readVideoInfo(context, Uri.fromFile(file), file.name, file.length(), file.lastModified() / 1000, file.absolutePath)
+                // 按 (大小, 修改时间) 缓存元数据：每次刷新「已转视频」不再逐个重新解析未变化的文件
+                val stamp = file.length() to file.lastModified()
+                val cached = synchronized(convertedInfoCache) { convertedInfoCache[file.absolutePath] }
+                if (cached != null && cached.first == stamp) return@mapNotNull cached.second
+                readVideoInfo(context, Uri.fromFile(file), file.name, stamp.first, stamp.second / 1000, file.absolutePath)
+                    ?.also { info -> synchronized(convertedInfoCache) { convertedInfoCache[file.absolutePath] = stamp to info } }
             }
             .sortedByDescending { it.dateAdded }
+        synchronized(convertedInfoCache) { convertedInfoCache.keys.retainAll(result.mapNotNull { it.path }.toSet()) }
+        return result
     }
+
+    private val convertedInfoCache = HashMap<String, Pair<Pair<Long, Long>, VideoInfo>>()
 
     /** 通过 DATA 列查询内容 URI 对应的文件所在目录 */
     fun getParentPath(context: Context, uri: Uri): String? {

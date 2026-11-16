@@ -21,9 +21,14 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.job
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -55,6 +60,9 @@ data class ConvertJob(
     val hasOutput: Boolean get() = state == JobState.SUCCESS && (outputUri != null || outputPath != null)
 }
 
+/** 队列跑空时的汇总：前台用 Snackbar 提示（后台由通知提示） */
+data class QueueSummary(val succeeded: List<ConvertJob>, val failed: List<ConvertJob>)
+
 /** 「已转视频」列表项：转换产物 + 产生它的任务（私有目录里扫到的旧文件可能没有任务记录） */
 data class ConvertedVideo(
     val video: VideoInfo,
@@ -65,6 +73,32 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
 
     private val _jobs = MutableStateFlow<List<ConvertJob>>(emptyList())
     val jobs: StateFlow<List<ConvertJob>> = _jobs.asStateFlow()
+
+    // 以下派生流只在内容变化时发射：转换进度每 1% 更新一次 jobs，
+    // 视频列表标识、底栏角标若直接依赖 jobs 会跟着整表重算
+    /** 有产物的成功任务 */
+    val successJobs: StateFlow<List<ConvertJob>> = _jobs
+        .map { list -> list.filter { it.hasOutput } }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 等待 / 进行中的任务数 */
+    val activeCount: StateFlow<Int> = _jobs
+        .map { list -> list.count { it.isActive } }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    /** 等待 / 进行中任务的源视频 uri（视频列表标「转换中」，批量转换跳过） */
+    val activeSourceUris: StateFlow<Set<String>> = _jobs
+        .map { list -> list.filter { it.isActive }.map { it.videoInfo.uri.toString() }.toSet() }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    private val _queueDone = MutableSharedFlow<QueueSummary>(extraBufferCapacity = 4)
+    val queueDone: SharedFlow<QueueSummary> = _queueDone.asSharedFlow()
+
+    /** 本轮队列（从有任务到跑空）中结束的任务 id */
+    private val finishedThisRound = mutableListOf<String>()
 
     private val _selectedJobIds = MutableStateFlow<Set<String>>(emptySet())
     val selectedJobIds: StateFlow<Set<String>> = _selectedJobIds.asStateFlow()
@@ -95,11 +129,26 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
     }
 
     init {
-        // 启动时从 SharedPreferences 恢复历史任务；进程被杀时仍在进行的任务标记为中断
-        _jobs.value = loadPersistedJobs().map {
-            if (it.isActive) it.copy(state = JobState.FAILED, error = JobErrors.INTERRUPTED) else it
+        viewModelScope.launch {
+            // 启动时在 IO 线程恢复历史任务；进程被杀时仍在进行的任务标记为中断，并清理其半成品文件
+            val restored = withContext(Dispatchers.IO) {
+                cleanupInterruptedOutput()
+                loadPersistedJobs().map {
+                    if (it.isActive) it.copy(state = JobState.FAILED, error = JobErrors.INTERRUPTED) else it
+                }
+            }
+            // 恢复期间可能已有新任务加入
+            _jobs.update { current -> restored.filter { r -> current.none { it.id == r.id } } + current }
+            startPersisting()
         }
-        // 持久化忽略进行中的进度：之前每 1% 进度都整表写一次 SharedPreferences
+        // 有任务排队 / 进行中时启动前台服务，切到后台转换也不会被系统冻结
+        viewModelScope.launch {
+            activeCount.collect { active -> ConvertService.update(context, active) }
+        }
+    }
+
+    /** 持久化忽略进行中的进度：之前每 1% 进度都整表写一次 SharedPreferences */
+    private fun startPersisting() {
         viewModelScope.launch {
             _jobs
                 .map { list -> list.map { if (it.isActive) it.copy(progress = 0f) else it } }
@@ -110,39 +159,60 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
         }
-        // 有任务排队 / 进行中时启动前台服务，切到后台转换也不会被系统冻结
-        viewModelScope.launch {
-            _jobs
-                .map { list -> list.count { it.isActive } }
-                .distinctUntilChanged()
-                .collect { active -> ConvertService.update(context, active) }
-        }
     }
 
-    /** 按「转换配置」中的输出位置派发任务 */
-    fun startJobWithDefaults(videoInfo: VideoInfo, degrees: Int = AppPrefs.defaultDegrees(context)): String {
+    /** 删除上次进程被杀时正在写的输出（MediaStore 待定条目 / SAF 文档 / .part 文件） */
+    private fun cleanupInterruptedOutput() {
+        prefs.getString(KEY_PENDING_OUTPUT, null)?.let { raw ->
+            VideoUtils.deleteOutput(context, Uri.parse(raw), null)
+            prefs.edit().remove(KEY_PENDING_OUTPUT).commit()
+        }
+        VideoUtils.cleanupLeftovers(context)
+    }
+
+    /** 按「转换配置」中的输出位置派发任务；同一任务已在队列中时返回 null */
+    fun startJobWithDefaults(videoInfo: VideoInfo, degrees: Int = AppPrefs.defaultDegrees(context)): String? {
         val target = AppPrefs.getOutputTarget(context)
         val tree = if (target == OutputTarget.CUSTOM) AppPrefs.getOutputTreeUri(context) else null
         return startJob(videoInfo, if (target == OutputTarget.CUSTOM && tree == null) OutputTarget.MOVIES else target, tree, degrees)
     }
 
+    /**
+     * 派发转换任务。
+     *  - 同一视频、同方向、同保存位置的任务已在排队 / 转换中：不重复加入，返回 null（防连点、重复批量）
+     *  - 之前已有相同参数的成功产物：新产物替换它（同名文件覆盖、旧记录移除），不留失效记录
+     */
     fun startJob(
         videoInfo: VideoInfo,
         target: OutputTarget,
         outputTreeUri: Uri?,
         degrees: Int,
         replaces: ConvertJob? = null
-    ): String {
+    ): String? {
+        val tree = if (target == OutputTarget.CUSTOM) outputTreeUri else null
+        val source = videoInfo.uri
+        fun ConvertJob.sameTask() =
+            this.videoInfo.uri == source && this.degrees == degrees && this.target == target && this.outputTreeUri == tree
+        if (_jobs.value.any { it.isActive && it.sameTask() }) return null
         val job = ConvertJob(
             id = UUID.randomUUID().toString(),
             videoInfo = videoInfo,
             target = target,
-            outputTreeUri = if (target == OutputTarget.CUSTOM) outputTreeUri else null,
+            outputTreeUri = tree,
             degrees = degrees
         )
+        val previous = replaces ?: _jobs.value.lastOrNull { it.hasOutput && it.sameTask() }
         _jobs.update { it + job }
-        runJob(job, replaces)
+        runJob(job, previous)
         return job.id
+    }
+
+    /** 该视频按此方向、保存位置是否已有转换产物（转换页提示「将替换」） */
+    fun hasSameOutput(videoInfo: VideoInfo, target: OutputTarget, outputTreeUri: Uri?, degrees: Int): Boolean {
+        val tree = if (target == OutputTarget.CUSTOM) outputTreeUri else null
+        return successJobs.value.any {
+            it.videoInfo.uri == videoInfo.uri && it.degrees == degrees && it.target == target && it.outputTreeUri == tree
+        }
     }
 
     /**
@@ -206,15 +276,21 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
                     // 写文件期间不可取消：取消通过 checkCancelled 在复制循环中检查并清理半成品。
                     // 否则在最后一次检查之后取消，已完整写出的文件会被丢弃结果、变成无主文件。
                     val result = withContext(Dispatchers.IO + NonCancellable) {
-                        VideoUtils.rotateVideo(
-                            context = context,
-                            input = job.videoInfo,
-                            degrees = job.degrees,
-                            target = job.target,
-                            outputTreeUri = job.outputTreeUri,
-                            checkCancelled = { if (!self.isActive) throw CancellationException("cancelled") }
-                        ) { progress ->
-                            updateJob(job.id) { it.copy(progress = progress) }
+                        try {
+                            VideoUtils.rotateVideo(
+                                context = context,
+                                input = job.videoInfo,
+                                degrees = job.degrees,
+                                target = job.target,
+                                outputTreeUri = job.outputTreeUri,
+                                checkCancelled = { if (!self.isActive) throw CancellationException("cancelled") },
+                                // 同步写入：进程在转换中被杀，下次启动据此删除半成品
+                                onOutputCreated = { prefs.edit().putString(KEY_PENDING_OUTPUT, it.toString()).commit() }
+                            ) { progress ->
+                                updateJob(job.id) { it.copy(progress = progress) }
+                            }
+                        } finally {
+                            prefs.edit().remove(KEY_PENDING_OUTPUT).apply()
                         }
                     }
                     withContext(NonCancellable) { handleResult(job, replaces, result) }
@@ -227,10 +303,24 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
                     it.copy(state = JobState.FAILED, error = e.message ?: JobErrors.FAILED)
                 }
             }
-            refreshConverted()
+            onJobFinished(job.id)
         }
         coroutineJobs[job.id] = coroutineJob
         coroutineJob.invokeOnCompletion { coroutineJobs.remove(job.id) }
+    }
+
+    /** 队列跑空时汇总本轮结果（取消的不计） */
+    private fun onJobFinished(id: String) {
+        finishedThisRound.add(id)
+        val list = _jobs.value
+        if (list.any { it.isActive }) return
+        val finished = finishedThisRound.mapNotNull { fid -> list.firstOrNull { it.id == fid } }
+        finishedThisRound.clear()
+        val summary = QueueSummary(
+            succeeded = finished.filter { it.state == JobState.SUCCESS },
+            failed = finished.filter { it.state == JobState.FAILED }
+        )
+        if (summary.succeeded.isNotEmpty() || summary.failed.isNotEmpty()) _queueDone.tryEmit(summary)
     }
 
     private suspend fun handleResult(job: ConvertJob, replaces: ConvertJob?, result: Result<RotateOutput>) {
@@ -257,6 +347,7 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
                     }
                     _jobs.update { list -> list.filter { it.id != replaces.id } }
                 }
+                _outputRevision.update { it + 1 }
                 Notifier.notifyResult(context, job.id, R.string.notif_done, job.videoInfo.displayName)
             },
             onFailure = { e ->
@@ -291,9 +382,13 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
         _jobs.update { list -> list.filter { it.id !in ids } }
         _selectedJobIds.value = emptySet()
         if (_jobs.value.isEmpty()) _isSelectMode.value = false
-        viewModelScope.launch(Dispatchers.IO) {
-            targets.filter { it.hasOutput }.forEach { VideoUtils.deleteOutput(context, it.outputUri, it.outputPath) }
-            refreshConverted()
+        val withOutput = targets.filter { it.hasOutput }
+        if (withOutput.isEmpty()) return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                withOutput.forEach { VideoUtils.deleteOutput(context, it.outputUri, it.outputPath) }
+            }
+            onOutputsDeleted()
         }
     }
 
@@ -303,9 +398,9 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
         updateJob(id) {
             it.copy(outputPath = null, outputUri = null, state = JobState.FAILED, error = JobErrors.FILE_DELETED)
         }
-        viewModelScope.launch(Dispatchers.IO) {
-            VideoUtils.deleteOutput(context, job.outputUri, job.outputPath)
-            refreshConverted()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { VideoUtils.deleteOutput(context, job.outputUri, job.outputPath) }
+            onOutputsDeleted()
         }
     }
 
@@ -317,10 +412,16 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         _converted.update { list -> list.filter { it.video.uri != item.video.uri } }
-        viewModelScope.launch(Dispatchers.IO) {
-            VideoUtils.deleteOutput(context, item.video.uri, item.video.path)
-            refreshConverted()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { VideoUtils.deleteOutput(context, item.video.uri, item.video.path) }
+            onOutputsDeleted()
         }
+    }
+
+    /** 产物文件被删除后：视频列表重扫、「已转视频」刷新 */
+    private fun onOutputsDeleted() {
+        _outputRevision.update { it + 1 }
+        refreshConverted()
     }
 
     fun reverseConverted(item: ConvertedVideo) {
@@ -337,8 +438,12 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
      * 汇总「已转视频」：成功任务的输出（任意保存位置）+ 私有目录中扫描到的产物，
      * 过滤掉已被删除的文件。之前只扫描私有目录，保存到 Movies / DCIM / 自定义路径的产物都看不到。
      */
+    private var refreshJob: Job? = null
+
     fun refreshConverted() {
-        viewModelScope.launch {
+        // 新的刷新取代进行中的旧刷新，避免旧结果后到覆盖新列表
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             _convertedLoading.value = true
             val jobsSnapshot = _jobs.value
             val list = withContext(Dispatchers.IO) {
@@ -358,9 +463,9 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
                 }
                 result
             }
-            _converted.value = list
+            // 内容不变时不发射，列表不重组；视频列表的重扫由真正的文件增删（outputRevision）触发
+            if (list != _converted.value) _converted.value = list
             _convertedLoading.value = false
-            _outputRevision.update { it + 1 }
         }
     }
 
@@ -415,6 +520,10 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
 
     // ---- 持久化 ----
 
+    private companion object {
+        const val KEY_PENDING_OUTPUT = "pending_output"
+        const val MAX_FINISHED_HISTORY = 200
+    }
 
     private fun loadPersistedJobs(): List<ConvertJob> {
         return try {
@@ -431,7 +540,12 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
     private fun persistJobs(jobs: List<ConvertJob>) {
         try {
             val arr = JSONArray()
-            jobs.forEach { arr.put(it.toJson()) }
+            // 只保留最近的已结束记录，历史不无限增长（产物文件不受影响，仍在「已转视频」中）
+            val keepFinished = jobs.filter { it.isFinished }
+                .sortedByDescending { it.createdAt }
+                .take(MAX_FINISHED_HISTORY)
+                .map { it.id }.toSet()
+            jobs.filter { it.isActive || it.id in keepFinished }.forEach { arr.put(it.toJson()) }
             prefs.edit().putString("jobs", arr.toString()).apply()
         } catch (_: Exception) {}
     }

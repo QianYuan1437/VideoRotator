@@ -1,5 +1,13 @@
 package com.videorotator
 
+import com.videorotator.utils.ConvertMark
+import com.videorotator.utils.Notifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarHost
 import com.videorotator.utils.AppLocale
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.res.stringResource
@@ -90,6 +98,28 @@ class MainActivity : AppCompatActivity() {
 
     private var fileBrowserViewModel: FileBrowserViewModel? = null
 
+    /**
+     * 申请读取视频权限。用户主动点「授予权限」时（[fromUser]），若已被永久拒绝则改为打开
+     * 应用设置页 —— 否则系统不再弹框，按钮点了没有任何反应。
+     */
+    private fun requestVideoPermission(fromUser: Boolean) {
+        val perm = PermissionUtils.getRequiredPermissions().first()
+        val permanentlyDenied = AppPrefs.wasPermissionAsked(this, perm) &&
+            !shouldShowRequestPermissionRationale(perm)
+        if (permanentlyDenied) {
+            if (fromUser) {
+                Toast.makeText(this, R.string.perm_open_settings, Toast.LENGTH_LONG).show()
+                startActivity(
+                    Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.fromParts("package", packageName, null))
+                )
+            }
+            return
+        }
+        AppPrefs.setPermissionAsked(this, perm)
+        requestPermissionLauncher.launch(PermissionUtils.getRequiredPermissions())
+    }
+
     // 主题状态
     private var themeColorIndex by mutableStateOf(0)
     private var backgroundMode by mutableStateOf(BackgroundMode.LIGHT)
@@ -161,13 +191,16 @@ class MainActivity : AppCompatActivity() {
                     val fbViewModel: FileBrowserViewModel = viewModel()
                     fileBrowserViewModel = fbViewModel
 
-                    // 只在首次进入时检查 / 申请权限（之前写在组合体里，每次重组都会触发一次全盘扫描）
+                    // 只在首次进入时检查 / 申请权限（之前写在组合体里，每次重组都会触发一次全盘扫描）；
+                    // rememberSaveable：切换语言 / 深色模式重建 Activity 时不再重复弹权限框
+                    var permissionChecked by rememberSaveable { mutableStateOf(false) }
                     LaunchedEffect(Unit) {
                         if (PermissionUtils.hasPermissions(this@MainActivity)) {
                             fbViewModel.setPermissionGranted(true)
-                        } else {
-                            requestPermissionLauncher.launch(PermissionUtils.getRequiredPermissions())
+                        } else if (!permissionChecked) {
+                            requestVideoPermission(fromUser = false)
                         }
+                        permissionChecked = true
                     }
 
                     MainScreen(
@@ -189,9 +222,7 @@ class MainActivity : AppCompatActivity() {
                             outputTreeUri = null
                             AppPrefs.setOutputTreeUri(this, null)
                         },
-                        onRequestPermission = {
-                            requestPermissionLauncher.launch(PermissionUtils.getRequiredPermissions())
-                        }
+                        onRequestPermission = { requestVideoPermission(fromUser = true) }
                     )
                 }
             }
@@ -252,9 +283,65 @@ fun MainScreen(
     var convertingVideo by remember { mutableStateOf<VideoInfo?>(null) }
     val playerViewModel: PlayerViewModel = viewModel()
     val convertViewModel: ConvertViewModel = viewModel()
-    val jobs by convertViewModel.jobs.collectAsState()
+    // 只订阅任务数：转换进度每 1% 更新一次任务列表，订阅整个列表会让整个主界面跟着重组
+    val activeJobs by convertViewModel.activeCount.collectAsState()
     val fbState by fbViewModel.state.collectAsState()
     val jobsSelectMode by convertViewModel.isSelectMode.collectAsState()
+    val context = LocalContext.current
+
+    // 队列跑完时在应用内提示结果（应用在后台时由通知提示），可直接播放 / 重试 / 查看
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(convertViewModel) {
+        convertViewModel.queueDone.collect { summary ->
+            if (!MainActivity.isInForeground) return@collect
+            val ok = summary.succeeded
+            val failed = summary.failed
+            val (message, action) = when {
+                ok.size == 1 && failed.isEmpty() ->
+                    context.getString(R.string.snack_done_one, ok[0].videoInfo.displayName) to
+                        context.getString(R.string.play)
+                ok.isEmpty() && failed.size == 1 ->
+                    context.getString(R.string.snack_failed_one, failed[0].videoInfo.displayName) to
+                        context.getString(R.string.retry)
+                failed.isEmpty() -> context.getString(R.string.snack_done_many, ok.size) to
+                    context.getString(R.string.view)
+                else -> context.getString(R.string.snack_done_with_failed, ok.size, failed.size) to
+                    context.getString(R.string.view)
+            }
+            val result = snackbarHostState.showSnackbar(
+                message, actionLabel = action, withDismissAction = true, duration = SnackbarDuration.Long
+            )
+            if (result != SnackbarResult.ActionPerformed) return@collect
+            when {
+                ok.size == 1 && failed.isEmpty() -> convertViewModel.outputInfo(ok[0])?.let {
+                    convertingVideo = null
+                    playingVideo = it
+                }
+                ok.isEmpty() && failed.size == 1 -> convertViewModel.retryJob(failed[0].id)
+                else -> {
+                    convertingVideo = null
+                    playingVideo = null
+                    convertListTab = if (failed.isEmpty()) CONVERT_TAB_CONVERTED else CONVERT_TAB_PROGRESS
+                    selectedTab = 1
+                }
+            }
+        }
+    }
+
+    // 首次加入任务时申请通知权限（Android 13+），否则默认开启的「转换完成通知」实际发不出来
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {}
+    LaunchedEffect(activeJobs > 0) {
+        val perm = android.Manifest.permission.POST_NOTIFICATIONS
+        if (activeJobs > 0 && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+            AppPrefs.getNotifyOnComplete(context) && !Notifier.canPost(context) &&
+            !AppPrefs.wasPermissionAsked(context, perm)
+        ) {
+            AppPrefs.setPermissionAsked(context, perm)
+            notificationPermissionLauncher.launch(perm)
+        }
+    }
 
     val playing = playingVideo
     val converting = convertingVideo
@@ -274,137 +361,153 @@ fun MainScreen(
     ) {
         selectedTab = 0
     }
+    // 还有任务在转换时，首页按返回只退到后台：Android 11 及以下返回会销毁 Activity，
+    // 连带取消排队中的任务
+    BackHandler(enabled = playing == null && converting == null && selectedTab == 0 &&
+        !fbState.isSelectMode && !jobsSelectMode && activeJobs > 0
+    ) {
+        (context as? android.app.Activity)?.moveTaskToBack(true)
+    }
 
-    when {
-        // 转换页优先（从播放器进入后，返回则回到播放器）
-        converting != null -> ConvertScreen(
-            videoInfo = converting,
-            viewModel = convertViewModel,
-            outputTreeUri = outputTreeUri,
-            onPickOutputDirectory = onPickOutputDirectory,
-            onBack = { convertingVideo = null },
-            onStarted = {
-                convertingVideo = null
-                playingVideo = null
-                convertListTab = CONVERT_TAB_PROGRESS
-                selectedTab = 1
-            }
-        )
+    Box(Modifier.fillMaxSize()) {
+        when {
+            // 转换页优先（从播放器进入后，返回则回到播放器）
+            converting != null -> ConvertScreen(
+                videoInfo = converting,
+                viewModel = convertViewModel,
+                outputTreeUri = outputTreeUri,
+                onPickOutputDirectory = onPickOutputDirectory,
+                onBack = { convertingVideo = null },
+                onStarted = {
+                    convertingVideo = null
+                    playingVideo = null
+                    convertListTab = CONVERT_TAB_PROGRESS
+                    selectedTab = 1
+                }
+            )
 
-        playing != null -> PlayerScreen(
-            videoInfo = playing,
-            viewModel = playerViewModel,
-            onBack = { playingVideo = null },
-            onConvert = { convertingVideo = it }
-        )
+            playing != null -> PlayerScreen(
+                videoInfo = playing,
+                viewModel = playerViewModel,
+                onBack = { playingVideo = null },
+                onConvert = { convertingVideo = it }
+            )
 
-        else -> Scaffold(
-            bottomBar = {
-                // 底部导航栏：底部圆角裁剪 + 系统手势栏内边距，适配圆角屏幕底边
-                Surface(
-                    shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 8.dp
-                ) {
-                    Column(
-                        modifier = Modifier
-                            // 两侧各留 16dp，避免标签文字紧贴屏幕圆角
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .windowInsetsPadding(WindowInsets.navigationBars)
+            else -> Scaffold(
+                snackbarHost = { SnackbarHost(snackbarHostState) },
+                bottomBar = {
+                    // 底部导航栏：底部圆角裁剪 + 系统手势栏内边距，适配圆角屏幕底边
+                    Surface(
+                        shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        shadowElevation = 8.dp
                     ) {
-                        Box(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = Alignment.Center
+                        Column(
+                            modifier = Modifier
+                                // 两侧各留 16dp，避免标签文字紧贴屏幕圆角
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .windowInsetsPadding(WindowInsets.navigationBars)
                         ) {
-                            NavigationBar(
-                                containerColor = Color.Transparent,
-                                tonalElevation = 0.dp,
-                                windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp)
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.Center
                             ) {
-                                val activeJobs = jobs.count { it.isActive }
-                                tabs.forEachIndexed { index, tab ->
-                                    NavigationBarItem(
-                                        icon = {
-                                            // 转换列表 Tab 显示进行中的任务数
-                                            if (index == 1 && activeJobs > 0) {
-                                                BadgedBox(badge = { Badge { Text("$activeJobs") } }) {
+                                NavigationBar(
+                                    containerColor = Color.Transparent,
+                                    tonalElevation = 0.dp,
+                                    windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp)
+                                ) {
+                                    tabs.forEachIndexed { index, tab ->
+                                        NavigationBarItem(
+                                            icon = {
+                                                // 转换列表 Tab 显示进行中的任务数
+                                                if (index == 1 && activeJobs > 0) {
+                                                    BadgedBox(badge = { Badge { Text("$activeJobs") } }) {
+                                                        Icon(tab.icon, contentDescription = tab.title)
+                                                    }
+                                                } else {
                                                     Icon(tab.icon, contentDescription = tab.title)
                                                 }
-                                            } else {
-                                                Icon(tab.icon, contentDescription = tab.title)
-                                            }
-                                        },
-                                        label = {
-                                            Text(
-                                                tab.title,
-                                                fontSize = 12.sp,
-                                                maxLines = 1,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                                fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
+                                            },
+                                            label = {
+                                                Text(
+                                                    tab.title,
+                                                    fontSize = 12.sp,
+                                                    maxLines = 1,
+                                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                    fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
+                                                )
+                                            },
+                                            selected = selectedTab == index,
+                                            onClick = { selectedTab = index },
+                                            colors = NavigationBarItemDefaults.colors(
+                                                // 选中态：主题色底 + 自动对比色图标（柠檬黄等浅色主题下之前图标与底色同色看不见）
+                                                selectedIconColor = com.videorotator.ui.theme.OnPrimary,
+                                                selectedTextColor = com.videorotator.ui.theme.PurpleDark,
+                                                unselectedIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                                                unselectedTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                                                indicatorColor = MaterialTheme.colorScheme.primary
                                             )
-                                        },
-                                        selected = selectedTab == index,
-                                        onClick = { selectedTab = index },
-                                        colors = NavigationBarItemDefaults.colors(
-                                            // 选中态：主题色底 + 自动对比色图标（柠檬黄等浅色主题下之前图标与底色同色看不见）
-                                            selectedIconColor = com.videorotator.ui.theme.OnPrimary,
-                                            selectedTextColor = com.videorotator.ui.theme.PurpleDark,
-                                            unselectedIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                                            unselectedTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                                            indicatorColor = MaterialTheme.colorScheme.primary
                                         )
-                                    )
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            },
-            containerColor = MaterialTheme.colorScheme.background
-        ) { paddingValues ->
-            Surface(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues),
-                color = MaterialTheme.colorScheme.background
-            ) {
-                when (selectedTab) {
-                    0 -> FileBrowserTab(
-                        fbViewModel = fbViewModel,
-                        listState = videoListState,
-                        convertViewModel = convertViewModel,
-                        onPickDirectory = onPickBrowseDirectory,
-                        onRequestPermission = onRequestPermission,
-                        onVideoClick = { video ->
-                            // 记住该视频所在的目录（路径栏点击可跳回）
-                            fbViewModel.rememberPlayedVideo(video)
-                            playingVideo = video
-                        },
-                        onBatchStarted = {
-                            convertListTab = CONVERT_TAB_PROGRESS
-                            selectedTab = 1
-                        }
-                    )
-                    1 -> ConvertListScreen(
-                        viewModel = convertViewModel,
-                        currentTab = convertListTab,
-                        onTabSelected = { convertListTab = it },
-                        onPlay = { playingVideo = it }
-                    )
-                    2 -> ConvertConfigScreen(
-                        outputTreeUri = outputTreeUri,
-                        onPickOutputDirectory = onPickOutputDirectory,
-                        onClearOutputDirectory = onClearOutputDirectory
-                    )
-                    3 -> SettingsScreen(
-                        currentThemeColor = currentThemeColor,
-                        currentBackgroundMode = currentBackgroundMode,
-                        onThemeColorChanged = onThemeColorChanged,
-                        onBackgroundModeChanged = onBackgroundModeChanged
-                    )
+                },
+                containerColor = MaterialTheme.colorScheme.background
+            ) { paddingValues ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    when (selectedTab) {
+                        0 -> FileBrowserTab(
+                            fbViewModel = fbViewModel,
+                            listState = videoListState,
+                            convertViewModel = convertViewModel,
+                            onPickDirectory = onPickBrowseDirectory,
+                            onRequestPermission = onRequestPermission,
+                            onVideoClick = { video ->
+                                // 记住该视频所在的目录（路径栏点击可跳回）
+                                fbViewModel.rememberPlayedVideo(video)
+                                playingVideo = video
+                            },
+                            onBatchStarted = {
+                                convertListTab = CONVERT_TAB_PROGRESS
+                                selectedTab = 1
+                            }
+                        )
+                        1 -> ConvertListScreen(
+                            viewModel = convertViewModel,
+                            currentTab = convertListTab,
+                            onTabSelected = { convertListTab = it },
+                            onPlay = { playingVideo = it }
+                        )
+                        2 -> ConvertConfigScreen(
+                            outputTreeUri = outputTreeUri,
+                            onPickOutputDirectory = onPickOutputDirectory,
+                            onClearOutputDirectory = onClearOutputDirectory
+                        )
+                        3 -> SettingsScreen(
+                            currentThemeColor = currentThemeColor,
+                            currentBackgroundMode = currentBackgroundMode,
+                            onThemeColorChanged = onThemeColorChanged,
+                            onBackgroundModeChanged = onBackgroundModeChanged
+                        )
+                    }
                 }
             }
+        }
+        // 播放页 / 转换页没有 Scaffold，结果提示浮在底部
+        if (playing != null || converting != null) {
+            SnackbarHost(
+                snackbarHostState,
+                Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars)
+            )
         }
     }
 }
@@ -421,25 +524,26 @@ fun FileBrowserTab(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val state by fbViewModel.state.collectAsState()
-    val jobs by convertViewModel.jobs.collectAsState()
+    val successJobs by convertViewModel.successJobs.collectAsState()
+    val activeSourceUris by convertViewModel.activeSourceUris.collectAsState()
     // 产物增删后刷新列表，让新产物出现并打上标识、已删除的文件消失
     val outputRevision by convertViewModel.outputRevision.collectAsState()
     LaunchedEffect(outputRevision) { fbViewModel.syncOutputRevision(outputRevision) }
 
-    // 标识 / 筛选 / 去重只依赖列表与任务记录，记忆计算结果，避免每次重组重复遍历
-    val successJobs = remember(jobs) { jobs.filter { it.hasOutput } }
+    // 标识 / 去重 / 筛选分步记忆：标识只在列表或任务结果变化时计算一次，切换筛选只做过滤；
+    // 任务流只在成功产物 / 队列内容变化时发射，转换进度不会触发重算
+    val marked = remember(state.videos, successJobs, activeSourceUris) {
+        VideoMarks.mark(state.videos, successJobs, activeSourceUris)
+    }
     // 筛选数量与去重开关保持一致
-    val all = remember(state.videos, successJobs, state.dedupe) {
-        VideoMarks.mark(state.videos, successJobs, VideoFilter.ALL, state.dedupe)
-    }
-    val visible = remember(state.videos, successJobs, state.filter, state.dedupe) {
-        VideoMarks.mark(state.videos, successJobs, state.filter, state.dedupe)
-    }
+    val all = remember(marked, successJobs, state.dedupe) { VideoMarks.dedupe(marked, successJobs, state.dedupe) }
+    val visible = remember(all, state.filter) { VideoMarks.filter(all, state.filter) }
     val counts = remember(all) {
+        val converted = all.count { with(VideoMarks) { it.mark.isConverted } }
         mapOf(
             VideoFilter.ALL to all.size,
-            VideoFilter.UNCONVERTED to all.count { it.mark == com.videorotator.utils.ConvertMark.NONE },
-            VideoFilter.CONVERTED to all.count { it.mark != com.videorotator.utils.ConvertMark.NONE }
+            VideoFilter.UNCONVERTED to all.size - converted,
+            VideoFilter.CONVERTED to converted
         )
     }
     val autoScan = remember { AppPrefs.getAutoScan(context) }
@@ -467,12 +571,24 @@ fun FileBrowserTab(
         onExitSelectMode = { fbViewModel.exitSelectMode() },
         onBatchConvert = {
             // 批量转换使用「转换配置」中的输出目录和旋转方向（之前写死为 Download + 顺时针）
+            // 跳过转换产物、已转换过和已在队列中的视频：全选后批量转换不会把产物再转一遍、
+            // 也不会给同一视频重复排队（需要重转可在播放页单独转换）
             val selected = fbViewModel.selectedVideos()
             if (selected.isNotEmpty()) {
-                selected.forEach { video -> convertViewModel.startJobWithDefaults(video) }
+                val markOf = marked.associate { it.video.uri to it.mark }
+                val added = selected.count { video ->
+                    (markOf[video.uri] ?: ConvertMark.NONE) == ConvertMark.NONE &&
+                        convertViewModel.startJobWithDefaults(video) != null
+                }
+                val skipped = selected.size - added
                 fbViewModel.exitSelectMode()
-                Toast.makeText(context, context.getString(R.string.batch_added, selected.size), Toast.LENGTH_SHORT).show()
-                onBatchStarted()
+                val message = when {
+                    added == 0 -> context.getString(R.string.batch_none)
+                    skipped > 0 -> context.getString(R.string.batch_added_skipped, added, skipped)
+                    else -> context.getString(R.string.batch_added, added)
+                }
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                if (added > 0) onBatchStarted()
             }
         },
         onJumpToLastPlayed = { fbViewModel.jumpToLastPlayedParent() },

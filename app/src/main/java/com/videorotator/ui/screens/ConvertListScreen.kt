@@ -118,9 +118,9 @@ fun ConvertListScreen(
     var sortKey by remember { mutableStateOf(SortKey.DATE_DESC) }
     var confirmClear by remember { mutableStateOf(false) }
 
-    // 有任务完成时刷新「已转视频」
-    val successCount = jobs.count { it.state == JobState.SUCCESS }
-    LaunchedEffect(successCount) { viewModel.refreshConverted() }
+    // 进入页面及成功产物变化时刷新「已转视频」（产物流只在成功任务变化时发射，进度不触发）
+    val successJobs by viewModel.successJobs.collectAsState()
+    LaunchedEffect(successJobs) { viewModel.refreshConverted() }
 
     Column(modifier = modifier.fillMaxSize().background(PurpleBg)) {
         Column(
@@ -166,14 +166,14 @@ fun ConvertListScreen(
 
         when (currentTab) {
             CONVERT_TAB_PROGRESS -> ProgressTab(
-                jobs = jobs.sortedByDescending { it.createdAt },
+                jobs = remember(jobs) { jobs.sortedByDescending { it.createdAt } },
                 selectedIds = selectedIds,
                 isSelectMode = isSelectMode,
                 viewModel = viewModel,
                 onPlay = onPlay
             )
             else -> ConvertedVideosTab(
-                items = sortConverted(converted, sortKey),
+                items = remember(converted, sortKey) { sortConverted(converted, sortKey) },
                 loading = convertedLoading,
                 viewModel = viewModel,
                 onPlay = onPlay
@@ -311,6 +311,8 @@ private fun ProgressTab(
     onPlay: (VideoInfo) -> Unit
 ) {
     var menuJob by remember { mutableStateOf<ConvertJob?>(null) }
+    // 删除视频文件前确认（first = 任务，second = 是否同时删除记录）
+    var pendingFileDelete by remember { mutableStateOf<Pair<ConvertJob, Boolean>?>(null) }
     var deleteIds by remember { mutableStateOf<Set<String>?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -383,15 +385,29 @@ private fun ProgressTab(
                 menuJob = null
             },
             onDeleteFile = {
-                job.outputUri?.let { evictThumbnail(it) }
-                viewModel.removeFileOnly(job.id)
+                pendingFileDelete = job to false
                 menuJob = null
             },
             onDeleteBoth = {
-                job.outputUri?.let { evictThumbnail(it) }
-                viewModel.removeJobAndFile(job.id)
+                pendingFileDelete = job to true
                 menuJob = null
             }
+        )
+    }
+
+    pendingFileDelete?.let { (job, withRecord) ->
+        val name = viewModel.outputInfo(job)?.displayName ?: job.videoInfo.displayName
+        ConfirmDialog(
+            title = stringResource(if (withRecord) R.string.action_delete_both else R.string.delete_file_title),
+            message = stringResource(if (withRecord) R.string.delete_both_msg else R.string.delete_file_msg, name),
+            confirmText = stringResource(R.string.delete),
+            danger = true,
+            onConfirm = {
+                job.outputUri?.let { evictThumbnail(it) }
+                if (withRecord) viewModel.removeJobAndFile(job.id) else viewModel.removeFileOnly(job.id)
+                pendingFileDelete = null
+            },
+            onDismiss = { pendingFileDelete = null }
         )
     }
 
