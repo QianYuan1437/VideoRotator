@@ -1,12 +1,12 @@
 package com.videorotator.ui.screens
 
-import android.graphics.Bitmap
-import android.media.MediaMetadataRetriever
+import com.videorotator.R
+import androidx.compose.ui.res.stringResource
 import android.net.Uri
-import android.util.LruCache
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,29 +20,32 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.SdStorage
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.outlined.CheckBox
-import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.SubdirectoryArrowLeft
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -56,39 +59,53 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.videorotator.ui.components.ConvertBadge
+import com.videorotator.ui.components.InfoChip
+import com.videorotator.ui.components.OrientationIndicator
+import com.videorotator.ui.components.ScreenHorizontalPadding
+import com.videorotator.ui.components.ScreenTitle
+import com.videorotator.ui.components.ScreenTopPadding
+import com.videorotator.ui.components.VideoThumbnail
+import com.videorotator.ui.theme.CardSurface
+import com.videorotator.ui.theme.OnPrimary
 import com.videorotator.ui.theme.PurpleBg
 import com.videorotator.ui.theme.PurpleDark
 import com.videorotator.ui.theme.PurpleLight
 import com.videorotator.ui.theme.PurplePrimary
-import com.videorotator.ui.theme.White
+import com.videorotator.utils.ConvertMark
+import com.videorotator.utils.MarkedVideo
 import com.videorotator.utils.VideoInfo
 import com.videorotator.viewmodel.FileBrowserState
 import com.videorotator.viewmodel.SortKey
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.videorotator.viewmodel.VideoFilter
 
 @Composable
 fun FileBrowserScreen(
     state: FileBrowserState,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    items: List<MarkedVideo>,
+    filterCounts: Map<VideoFilter, Int>,
+    autoScanEnabled: Boolean,
     onVideoClick: (VideoInfo) -> Unit,
+    onVideoLongClick: (VideoInfo) -> Unit,
     onToggleSelect: (Uri) -> Unit,
     onRefresh: () -> Unit,
     onNavigateToParent: () -> Unit,
     onNavigateToDirectory: (String) -> Unit,
     onSortKeySelected: (SortKey) -> Unit,
+    onFilterSelected: (VideoFilter) -> Unit,
+    onDedupeChanged: (Boolean) -> Unit,
     onToggleSelectMode: () -> Unit,
     onSelectAll: () -> Unit,
     onDeselectAll: () -> Unit,
@@ -96,6 +113,7 @@ fun FileBrowserScreen(
     onBatchConvert: () -> Unit,
     onJumpToLastPlayed: () -> Unit,
     onPickDirectory: () -> Unit,
+    onRequestPermission: () -> Unit,
     onConsumeLastPlayedUri: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -104,6 +122,25 @@ fun FileBrowserScreen(
             .fillMaxSize()
             .background(PurpleBg)
     ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = ScreenHorizontalPadding, end = 4.dp, top = ScreenTopPadding)
+        ) {
+            ScreenTitle(stringResource(R.string.tab_videos)) {
+                IconButton(onClick = onRefresh) {
+                    Icon(Icons.Filled.Refresh, stringResource(R.string.refresh), tint = PurpleDark)
+                }
+                SortMenuButton(sortKey = state.sortKey, onSortKeySelected = onSortKeySelected)
+                IconButton(onClick = onToggleSelectMode) {
+                    Icon(
+                        if (state.isSelectMode) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
+                        stringResource(R.string.multi_select),
+                        tint = if (state.isSelectMode) PurplePrimary else PurpleDark
+                    )
+                }
+            }
+        }
         QuickDirectoryBar(
             currentDir = state.currentDirectory,
             isPickedDir = state.pickedTreeUri != null,
@@ -111,68 +148,149 @@ fun FileBrowserScreen(
             onJumpToLastPlayed = onJumpToLastPlayed,
             onNavigateToParent = onNavigateToParent,
             onNavigateToDirectory = onNavigateToDirectory,
-            onRefresh = onRefresh,
-            onPickDirectory = onPickDirectory,
-            sortKey = state.sortKey,
-            onSortKeySelected = onSortKeySelected,
-            isSelectMode = state.isSelectMode,
-            onToggleSelectMode = onToggleSelectMode,
-            selectedCount = state.selectedUris.size,
-            totalCount = state.videos.size
+            onPickDirectory = onPickDirectory
+        )
+        FilterBar(
+            filter = state.filter,
+            counts = filterCounts,
+            dedupe = state.dedupe,
+            onFilterSelected = onFilterSelected,
+            onDedupeChanged = onDedupeChanged
         )
 
-        if (state.isLoading) {
-            Box(
+        if (state.isSelectMode) {
+            SelectActionBar(
+                selectedCount = state.selectedUris.size,
+                totalCount = items.size,
+                onSelectAll = onSelectAll,
+                onDeselectAll = onDeselectAll,
+                onBatchConvert = onBatchConvert,
+                onExitSelectMode = onExitSelectMode
+            )
+        }
+
+        when {
+            !state.hasPermission -> MessageState(
+                icon = Icons.Filled.Storage,
+                title = stringResource(R.string.need_permission),
+                subtitle = stringResource(R.string.need_permission_desc),
+                buttonText = stringResource(R.string.grant_permission),
+                onButton = onRequestPermission
+            )
+            state.isLoading && items.isEmpty() -> Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(color = PurplePrimary)
             }
-        } else if (state.videos.isEmpty()) {
-            EmptyState(onRefresh = onRefresh)
-        } else {
-            if (state.isSelectMode) {
-                SelectActionBar(
-                    selectedCount = state.selectedUris.size,
-                    totalCount = state.videos.size,
-                    onSelectAll = onSelectAll,
-                    onDeselectAll = onDeselectAll,
-                    onBatchConvert = onBatchConvert,
-                    onExitSelectMode = onExitSelectMode
-                )
-            }
-            // 用 LazyListState 记住滚动位置；从播放器返回时回到原视频卡片
-            val listState = rememberLazyListState()
-            val lastPlayedUri = state.lastPlayedVideoUri
-            LaunchedEffect(lastPlayedUri, state.videos.size) {
-                val uri = lastPlayedUri ?: return@LaunchedEffect
-                val idx = state.videos.indexOfFirst { it.uri.toString() == uri }
-                if (idx >= 0) {
-                    listState.animateScrollToItem(idx)
+            !state.hasLoaded && !autoScanEnabled -> MessageState(
+                icon = Icons.Filled.Refresh,
+                title = stringResource(R.string.auto_scan_off),
+                subtitle = stringResource(R.string.auto_scan_off_desc),
+                buttonText = stringResource(R.string.scan_videos),
+                onButton = onRefresh
+            )
+            items.isEmpty() && state.videos.isNotEmpty() -> MessageState(
+                icon = Icons.Filled.Movie,
+                title = stringResource(R.string.no_filter_match),
+                subtitle = stringResource(R.string.no_filter_match_desc, state.videos.size),
+                buttonText = stringResource(R.string.show_all),
+                onButton = { onFilterSelected(VideoFilter.ALL) }
+            )
+            items.isEmpty() -> MessageState(
+                icon = Icons.Filled.Storage,
+                title = stringResource(if (state.errorMessage != null) R.string.load_failed else R.string.no_videos),
+                subtitle = state.errorMessage ?: stringResource(R.string.no_videos_desc),
+                buttonText = stringResource(R.string.refresh),
+                onButton = onRefresh
+            )
+            else -> {
+                // listState 由 MainScreen 持有，从播放器返回时保持原滚动位置；
+                // 若列表因重扫发生变化，再定位到刚播放的视频卡片
+                val lastPlayedUri = state.lastPlayedVideoUri
+                LaunchedEffect(lastPlayedUri, items.size) {
+                    val uri = lastPlayedUri ?: return@LaunchedEffect
+                    val idx = items.indexOfFirst { it.video.uri.toString() == uri }
+                    if (idx >= 0) {
+                        // 不在可见范围内才滚动，避免返回时列表跳动
+                        val visible = listState.layoutInfo.visibleItemsInfo.any { it.index == idx }
+                        if (!visible) listState.scrollToItem(idx)
+                    }
                     onConsumeLastPlayedUri()
                 }
-            }
-            LazyColumn(
-                state = listState,
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(state.videos, key = { it.uri.toString() }) { video ->
-                    VideoCard(
-                        video = video,
-                        isSelectMode = state.isSelectMode,
-                        isSelected = state.selectedUris.contains(video.uri.toString()),
-                        onClick = {
-                            if (state.isSelectMode) {
-                                onToggleSelect(video.uri)
-                            } else {
-                                onVideoClick(video)
-                            }
-                        },
-                        onToggleSelect = { onToggleSelect(video.uri) }
-                    )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        contentPadding = PaddingValues(
+                            start = ScreenHorizontalPadding, end = ScreenHorizontalPadding,
+                            top = 4.dp, bottom = 16.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(items, key = { it.video.uri.toString() }) { item ->
+                            val video = item.video
+                            VideoCard(
+                                item = item,
+                                isSelectMode = state.isSelectMode,
+                                isSelected = state.selectedUris.contains(video.uri.toString()),
+                                onClick = {
+                                    if (state.isSelectMode) onToggleSelect(video.uri) else onVideoClick(video)
+                                },
+                                onLongClick = { onVideoLongClick(video) },
+                                onToggleSelect = { onToggleSelect(video.uri) }
+                            )
+                        }
+                    }
+                    // 列表已有内容时刷新，不再整页切成转圈，只在顶部显示细进度
+                    if (state.isLoading) {
+                        CircularProgressIndicator(
+                            color = PurplePrimary,
+                            strokeWidth = 3.dp,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 8.dp)
+                                .size(28.dp)
+                        )
+                    }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SortMenuButton(sortKey: SortKey, onSortKeySelected: (SortKey) -> Unit) {
+    Box {
+        var menuOpen by remember { mutableStateOf(false) }
+        IconButton(onClick = { menuOpen = true }) {
+            Icon(Icons.Filled.Sort, stringResource(R.string.sort), tint = PurpleDark)
+        }
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false }
+        ) {
+            SortKey.values().forEach { key ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            stringResource(key.labelRes),
+                            fontWeight = if (key == sortKey) FontWeight.Bold else FontWeight.Normal,
+                            color = if (key == sortKey) PurplePrimary else PurpleDark
+                        )
+                    },
+                    onClick = {
+                        onSortKeySelected(key)
+                        menuOpen = false
+                    },
+                    leadingIcon = {
+                        if (key == sortKey) {
+                            Icon(Icons.Filled.Check, null, tint = PurplePrimary, modifier = Modifier.size(18.dp))
+                        } else {
+                            Spacer(Modifier.size(18.dp))
+                        }
+                    }
+                )
             }
         }
     }
@@ -186,173 +304,108 @@ private fun QuickDirectoryBar(
     onJumpToLastPlayed: () -> Unit,
     onNavigateToParent: () -> Unit,
     onNavigateToDirectory: (String) -> Unit,
-    onRefresh: () -> Unit,
-    onPickDirectory: () -> Unit,
-    sortKey: SortKey,
-    onSortKeySelected: (SortKey) -> Unit,
-    isSelectMode: Boolean,
-    onToggleSelectMode: () -> Unit,
-    selectedCount: Int,
-    totalCount: Int
+    onPickDirectory: () -> Unit
 ) {
-    // 不再使用 Surface + 投影包裹路径栏：去除白底卡片与底部分隔线，
-    // 让视频列表 tab 顶部与其他三个 tab 视觉一致。
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = ScreenHorizontalPadding)
     ) {
+        // 当前路径（点击唤起系统文件夹选择器）+ 跳转到上次播放文件目录的入口
+        val canJump = lastPlayedParent != null && (lastPlayedParent != currentDir || isPickedDir)
+        Surface(
+            onClick = onPickDirectory,
+            shape = RoundedCornerShape(16.dp),
+            color = CardSurface,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
+                    .height(40.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // 当前路径 + 跳转到上次播放文件目录的入口；整行点击唤起系统文件夹选择器
-                val canJump = lastPlayedParent != null && lastPlayedParent != currentDir
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onPickDirectory)
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Filled.Home,
-                        contentDescription = "选择文件夹",
-                        tint = PurplePrimary.copy(alpha = 0.7f),
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        currentDir,
-                        fontSize = 13.sp,
-                        color = PurpleDark,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (isPickedDir) {
-                        Spacer(Modifier.width(4.dp))
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = PurplePrimary.copy(alpha = 0.18f)
-                        ) {
-                            Text(
-                                "已选",
-                                fontSize = 10.sp,
-                                color = PurplePrimary,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                            )
-                        }
-                    }
-                    if (canJump) {
-                        Spacer(Modifier.width(4.dp))
-                        TextButton(
-                            onClick = onJumpToLastPlayed,
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
-                        ) {
-                            Icon(
-                                Icons.Filled.History,
-                                null,
-                                tint = PurplePrimary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(2.dp))
-                            Text(
-                                "上次播放",
-                                fontSize = 12.sp,
-                                color = PurplePrimary,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-                Row {
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Filled.Refresh, "刷新", tint = PurpleDark)
-                    }
-                    Box {
-                        var menuOpen by remember { mutableStateOf(false) }
-                        IconButton(onClick = { menuOpen = true }) {
-                            Icon(Icons.Filled.Sort, "排序", tint = PurpleDark)
-                        }
-                        DropdownMenu(
-                            expanded = menuOpen,
-                            onDismissRequest = { menuOpen = false }
-                        ) {
-                            SortKey.values().forEach { key ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            key.label,
-                                            fontWeight = if (key == sortKey) FontWeight.Bold else FontWeight.Normal,
-                                            color = if (key == sortKey) PurplePrimary else PurpleDark
-                                        )
-                                    },
-                                    onClick = {
-                                        onSortKeySelected(key)
-                                        menuOpen = false
-                                    },
-                                    leadingIcon = {
-                                        if (key == sortKey) {
-                                            Icon(
-                                                Icons.Filled.CheckBox,
-                                                null,
-                                                tint = PurplePrimary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        } else {
-                                            Spacer(Modifier.size(18.dp))
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                    IconButton(onClick = onToggleSelectMode) {
-                        Icon(
-                            if (isSelectMode) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
-                            "多选",
-                            tint = if (isSelectMode) PurplePrimary else PurpleDark
+                Icon(
+                    Icons.Filled.FolderOpen,
+                    contentDescription = stringResource(R.string.pick_folder),
+                    tint = PurplePrimary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    displayDir(currentDir, stringResource(R.string.internal_storage)),
+                    fontSize = 13.sp,
+                    color = PurpleDark,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isPickedDir) {
+                    Spacer(Modifier.width(4.dp))
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = PurplePrimary.copy(alpha = 0.18f)
+                    ) {
+                        Text(
+                            stringResource(R.string.picked),
+                            fontSize = 10.sp,
+                            color = PurpleDark,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                         )
                     }
                 }
-            }
-            // 快捷目录按钮
-            val quickScroll = rememberScrollState()
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(quickScroll),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                QuickDirChip(Icons.Filled.SdStorage, "上级", onClick = onNavigateToParent)
-                QuickDirChip(Icons.Filled.Movie, "Movies") {
-                    onNavigateToDirectory(
-                        android.os.Environment.getExternalStoragePublicDirectory(
-                            android.os.Environment.DIRECTORY_MOVIES
-                        ).absolutePath
-                    )
-                }
-                QuickDirChip(Icons.Filled.Folder, "DCIM") {
-                    onNavigateToDirectory(
-                        android.os.Environment.getExternalStoragePublicDirectory(
-                            android.os.Environment.DIRECTORY_DCIM
-                        ).absolutePath
-                    )
-                }
-                QuickDirChip(Icons.Filled.Download, "下载") {
-                    onNavigateToDirectory(
-                        android.os.Environment.getExternalStoragePublicDirectory(
-                            android.os.Environment.DIRECTORY_DOWNLOADS
-                        ).absolutePath
-                    )
+                if (canJump) {
+                    TextButton(
+                        onClick = onJumpToLastPlayed,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) {
+                        Icon(Icons.Filled.History, null, tint = PurplePrimary, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(2.dp))
+                        Text(stringResource(R.string.last_played), fontSize = 12.sp, color = PurplePrimary, fontWeight = FontWeight.Medium)
+                    }
+                } else {
+                    Spacer(Modifier.width(8.dp))
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        // 快捷目录按钮
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            QuickDirChip(Icons.Filled.SubdirectoryArrowLeft, stringResource(R.string.dir_parent), onClick = onNavigateToParent)
+            QuickDirChip(Icons.Filled.Movie, "Movies") {
+                onNavigateToDirectory(publicDir(android.os.Environment.DIRECTORY_MOVIES))
+            }
+            QuickDirChip(Icons.Filled.Folder, "DCIM") {
+                onNavigateToDirectory(publicDir(android.os.Environment.DIRECTORY_DCIM))
+            }
+            QuickDirChip(Icons.Filled.Download, stringResource(R.string.dir_download)) {
+                onNavigateToDirectory(publicDir(android.os.Environment.DIRECTORY_DOWNLOADS))
+            }
+            QuickDirChip(Icons.Filled.Storage, stringResource(R.string.dir_all)) {
+                onNavigateToDirectory(android.os.Environment.getExternalStorageDirectory().absolutePath)
+            }
+        }
+    }
+}
+
+private fun publicDir(type: String): String =
+    android.os.Environment.getExternalStoragePublicDirectory(type).absolutePath
+
+/** /storage/emulated/0/Movies → 内部存储/Movies */
+private fun displayDir(dir: String, internal: String): String {
+    val root = android.os.Environment.getExternalStorageDirectory().absolutePath
+    return when {
+        dir == root -> internal
+        dir.startsWith("$root/") -> "$internal/" + dir.removePrefix("$root/")
+        dir.startsWith("primary:") -> "$internal/" + dir.removePrefix("primary:")
+        else -> dir
+    }
 }
 
 /** 快捷目录小标签（图标 + 文本） */
@@ -378,6 +431,85 @@ private fun QuickDirChip(
     }
 }
 
+/**
+ * 筛选栏：全部 / 未转换 / 已转换（带数量）+ 去重开关。
+ */
+@Composable
+private fun FilterBar(
+    filter: VideoFilter,
+    counts: Map<VideoFilter, Int>,
+    dedupe: Boolean,
+    onFilterSelected: (VideoFilter) -> Unit,
+    onDedupeChanged: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = ScreenHorizontalPadding, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        VideoFilter.values().forEach { f ->
+            SelectChip(
+                text = stringResource(f.labelRes) + (counts[f]?.let { " $it" } ?: ""),
+                selected = f == filter,
+                onClick = { onFilterSelected(f) }
+            )
+        }
+        Spacer(Modifier.width(4.dp))
+        Box(
+            modifier = Modifier
+                .width(1.dp)
+                .height(20.dp)
+                .background(PurpleDark.copy(alpha = 0.2f))
+        )
+        Spacer(Modifier.width(4.dp))
+        SelectChip(
+            text = stringResource(R.string.filter_dedupe),
+            selected = dedupe,
+            icon = Icons.Filled.ContentCopy,
+            onClick = { onDedupeChanged(!dedupe) }
+        )
+    }
+}
+
+@Composable
+private fun SelectChip(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) PurplePrimary else CardSurface,
+        border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, PurplePrimary.copy(alpha = 0.35f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (selected || icon != null) {
+                Icon(
+                    if (selected) Icons.Filled.Check else icon!!,
+                    null,
+                    tint = if (selected) OnPrimary else PurpleDark,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(
+                text,
+                fontSize = 13.sp,
+                color = if (selected) OnPrimary else PurpleDark,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
+            )
+        }
+    }
+}
+
 @Composable
 private fun SelectActionBar(
     selectedCount: Int,
@@ -394,65 +526,64 @@ private fun SelectActionBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                "已选 $selectedCount / $totalCount",
+                stringResource(R.string.selected_count, selectedCount, totalCount),
                 color = PurpleDark,
                 fontWeight = FontWeight.Medium,
                 fontSize = 13.sp
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = {
-                    if (selectedCount == totalCount) onDeselectAll() else onSelectAll()
-                }) {
-                    Text(
-                        if (selectedCount == totalCount) "取消全选" else "全选",
-                        color = PurplePrimary,
-                        fontSize = 13.sp
-                    )
+                val allSelected = totalCount > 0 && selectedCount >= totalCount
+                TextButton(onClick = { if (allSelected) onDeselectAll() else onSelectAll() }) {
+                    Text(stringResource(if (allSelected) R.string.deselect_all else R.string.select_all), color = PurplePrimary, fontSize = 13.sp)
                 }
                 Button(
                     onClick = onBatchConvert,
                     enabled = selectedCount > 0,
                     colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        "批量转换$selectedCount",
-                        color = White,
+                        stringResource(R.string.batch_convert, selectedCount),
+                        color = if (selectedCount > 0) OnPrimary else Color.Gray,
                         fontWeight = FontWeight.Medium,
                         fontSize = 13.sp
                     )
                 }
-                Spacer(Modifier.width(4.dp))
                 TextButton(onClick = onExitSelectMode) {
-                    Text("退出", color = PurpleDark, fontSize = 13.sp)
+                    Text(stringResource(R.string.exit), color = PurpleDark, fontSize = 13.sp)
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VideoCard(
-    video: VideoInfo,
+    item: MarkedVideo,
     isSelectMode: Boolean,
     isSelected: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     onToggleSelect: () -> Unit
 ) {
+    val video = item.video
     Card(
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) PurplePrimary.copy(alpha = 0.12f) else White
+            containerColor = if (isSelected) lerp(CardSurface, PurplePrimary, 0.25f) else CardSurface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 2.dp else 4.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clip(RoundedCornerShape(20.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
         Row(
             modifier = Modifier
@@ -460,7 +591,7 @@ private fun VideoCard(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 缩略图
+            // 缩略图 + 左上角转换标识
             Box(
                 modifier = Modifier
                     .size(100.dp, 70.dp)
@@ -468,9 +599,11 @@ private fun VideoCard(
                     .background(PurpleLight),
                 contentAlignment = Alignment.Center
             ) {
-                VideoThumbnail(
-                    uri = video.uri,
-                    modifier = Modifier.fillMaxSize()
+                VideoThumbnail(uri = video.uri, modifier = Modifier.fillMaxSize())
+                ConvertBadge(
+                    mark = item.mark,
+                    degrees = item.degrees,
+                    modifier = Modifier.align(Alignment.TopStart)
                 )
             }
 
@@ -480,45 +613,16 @@ private fun VideoCard(
                 Text(
                     text = video.displayName,
                     fontWeight = FontWeight.SemiBold,
-                    // 缩小字号给 chip 留出空间，避免名称被截断
                     fontSize = 13.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 三个 chip + 一个方向指示器，强制单行（关闭 softWrap），
-                    // 避免横屏 / 竖屏长方形被竖向拆字或被遮挡。
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = PurpleLight
-                    ) {
-                        Text(
-                            video.durationText,
-                            fontSize = 12.sp,
-                            color = PurpleDark,
-                            maxLines = 1,
-                            softWrap = false,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
-                    }
+                    InfoChip(video.durationText)
                     Spacer(Modifier.width(6.dp))
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = PurpleLight
-                    ) {
-                        Text(
-                            video.resolution,
-                            fontSize = 12.sp,
-                            color = PurpleDark,
-                            maxLines = 1,
-                            softWrap = false,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
-                    }
+                    InfoChip(video.resolution)
                     Spacer(Modifier.width(6.dp))
-                    // 方向指示器：用一块长方形代替"横屏"文字。
-                    // 横屏 = 横长方形，竖屏 = 竖长方形，方向箭头长度与分辨率/时长 chip 视觉对齐。
                     OrientationIndicator(isLandscape = video.isLandscape)
                 }
                 Spacer(Modifier.height(4.dp))
@@ -534,151 +638,43 @@ private fun VideoCard(
             if (isSelectMode) {
                 Checkbox(
                     checked = isSelected,
-                    onCheckedChange = { onToggleSelect() }
+                    onCheckedChange = { onToggleSelect() },
+                    colors = CheckboxDefaults.colors(checkedColor = PurplePrimary, checkmarkColor = OnPrimary)
                 )
             }
         }
     }
 }
 
-/**
- * 视频方向指示器：用一块长方形表示横竖屏方向。
- * - 横屏（landscape）→ 横长方形
- * - 竖屏（portrait）→ 竖长方形
- *
- * 容器采用与分辨率/时长 chip 完全一致的尺寸（RoundedCornerShape=12dp、
- * padding=horizontal 8dp / vertical 2dp），让方向指示器在视觉上与其他
- * chip 等同，避免尺寸不一致导致的卡片宽度被撑大或遮挡。
- */
 @Composable
-private fun OrientationIndicator(isLandscape: Boolean) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = if (isLandscape) PurplePrimary.copy(alpha = 0.2f) else PurpleLight
-    ) {
-        Box(
-            modifier = Modifier
-                .padding(horizontal = 8.dp, vertical = 2.dp)
-                .size(width = 18.dp, height = 14.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(
-                        width = if (isLandscape) 18.dp else 5.dp,
-                        height = if (isLandscape) 5.dp else 18.dp
-                    )
-                    .clip(RoundedCornerShape(1.5.dp))
-                    .background(PurpleDark)
-            )
-        }
-    }
-}
-
-@Composable
-private fun EmptyState(onRefresh: () -> Unit) {
+private fun MessageState(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    buttonText: String,
+    onButton: () -> Unit
+) {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                Icons.Filled.Storage,
-                null,
-                tint = PurplePrimary.copy(alpha = 0.4f),
-                modifier = Modifier.size(80.dp)
-            )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.widthIn(max = 320.dp).padding(horizontal = 24.dp)
+        ) {
+            Icon(icon, null, tint = PurplePrimary.copy(alpha = 0.4f), modifier = Modifier.size(80.dp))
             Spacer(Modifier.height(16.dp))
-            Text(
-                "未找到视频文件",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
-                color = Color.Gray
-            )
+            Text(title, fontSize = 18.sp, fontWeight = FontWeight.Medium, color = Color.Gray)
             Spacer(Modifier.height(8.dp))
-            Text(
-                "请确认目录中包含视频文件",
-                fontSize = 14.sp,
-                color = Color.Gray.copy(alpha = 0.7f)
-            )
+            Text(subtitle, fontSize = 14.sp, color = Color.Gray.copy(alpha = 0.7f), textAlign = TextAlign.Center)
             Spacer(Modifier.height(24.dp))
             Button(
-                onClick = onRefresh,
+                onClick = onButton,
                 colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
                 shape = RoundedCornerShape(20.dp)
             ) {
-                Icon(Icons.Filled.Refresh, null, tint = White)
-                Spacer(Modifier.width(8.dp))
-                Text("刷新", color = White)
+                Text(buttonText, color = OnPrimary)
             }
         }
     }
-}
-
-// 视频缩略图内存缓存（按字节计量，上限 32MB）
-private val thumbnailCache = object : LruCache<String, Bitmap>(32 * 1024 * 1024) {
-    override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
-}
-
-/**
- * 视频首帧缩略图：Coil 无法解码视频帧，这里用 MediaMetadataRetriever
- * 在 IO 线程抽取首帧，降采样后放入内存缓存。
- */
-@Composable
-private fun VideoThumbnail(
-    uri: Uri,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    var bitmap by remember(uri) {
-        mutableStateOf(thumbnailCache.get(uri.toString()))
-    }
-
-    if (bitmap == null) {
-        Icon(
-            Icons.Filled.Movie,
-            null,
-            tint = PurplePrimary.copy(alpha = 0.5f),
-            modifier = Modifier.size(32.dp)
-        )
-        LaunchedEffect(uri) {
-            val frame = withContext(Dispatchers.IO) {
-                try {
-                    val retriever = MediaMetadataRetriever()
-                    try {
-                        retriever.setDataSource(context, uri)
-                        retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST)
-                    } finally {
-                        retriever.release()
-                    }
-                } catch (e: Exception) {
-                    null
-                }
-            }
-            frame?.let { raw ->
-                val scaled = raw.scaleForThumbnail(480)
-                thumbnailCache.put(uri.toString(), scaled)
-                bitmap = scaled
-            }
-        }
-    } else {
-        Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = modifier
-        )
-    }
-}
-
-private fun Bitmap.scaleForThumbnail(maxDim: Int): Bitmap {
-    val longest = maxOf(width, height)
-    if (longest <= maxDim) return this
-    val scale = maxDim.toFloat() / longest
-    return Bitmap.createScaledBitmap(
-        this,
-        (width * scale).toInt().coerceAtLeast(1),
-        (height * scale).toInt().coerceAtLeast(1),
-        true
-    )
 }

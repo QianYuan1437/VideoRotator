@@ -4,32 +4,50 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.annotation.StringRes
+import com.videorotator.R
+import com.videorotator.utils.AppPrefs
+import com.videorotator.utils.ROTATION_UNKNOWN
 import com.videorotator.utils.VideoInfo
 import com.videorotator.utils.VideoUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-enum class SortKey(val label: String) {
-    DATE_DESC("最新优先"),
-    DATE_ASC("最旧优先"),
-    NAME_ASC("名称 A→Z"),
-    NAME_DESC("名称 Z→A"),
-    SIZE_DESC("最大优先"),
-    DURATION_DESC("时长最长")
+enum class SortKey(@StringRes val labelRes: Int) {
+    DATE_DESC(R.string.sort_date_desc),
+    DATE_ASC(R.string.sort_date_asc),
+    NAME_ASC(R.string.sort_name_asc),
+    NAME_DESC(R.string.sort_name_desc),
+    SIZE_DESC(R.string.sort_size_desc),
+    DURATION_DESC(R.string.sort_duration_desc)
+}
+
+/** 视频列表筛选：全部 / 未转换 / 已转换（含已转换的原视频和转换产物） */
+enum class VideoFilter(@StringRes val labelRes: Int) {
+    ALL(R.string.filter_all),
+    UNCONVERTED(R.string.filter_unconverted),
+    CONVERTED(R.string.filter_converted)
 }
 
 data class FileBrowserState(
     val videos: List<VideoInfo> = emptyList(),
     val isLoading: Boolean = false,
+    /** 是否已经扫描过（关闭「自动扫描」时，启动后需要手动刷新） */
+    val hasLoaded: Boolean = false,
     val currentDirectory: String = "",
     val errorMessage: String? = null,
     val hasPermission: Boolean = false,
     val sortKey: SortKey = SortKey.DATE_DESC,
+    val filter: VideoFilter = VideoFilter.ALL,
+    val dedupe: Boolean = false,
     val isSelectMode: Boolean = false,
     val selectedUris: Set<String> = emptySet(),
     val lastPlayedParent: String? = null,
@@ -44,49 +62,107 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
     val state: StateFlow<FileBrowserState> = _state.asStateFlow()
 
     private var rawVideos: List<VideoInfo> = emptyList()
+    private var loadJob: Job? = null
+    private var rotationJob: Job? = null
 
     init {
+        val ctx = getApplication<Application>()
         _state.value = _state.value.copy(
-            currentDirectory = VideoUtils.getDefaultVideoDirectory()
+            currentDirectory = VideoUtils.getDefaultVideoDirectory(),
+            filter = AppPrefs.getListFilter(ctx)
+                ?.let { runCatching { VideoFilter.valueOf(it) }.getOrNull() } ?: VideoFilter.ALL,
+            dedupe = AppPrefs.getListDedupe(ctx)
         )
     }
 
     fun setDirectory(path: String) {
-        _state.value = _state.value.copy(currentDirectory = path)
+        _state.update { it.copy(currentDirectory = path, pickedTreeUri = null) }
         loadVideos()
     }
 
+    /** 重新扫描当前目录（或当前选中的 SAF 文件夹） */
     fun loadVideos() {
-        viewModelScope.launch {
-            _state.value = _state.value.copy(isLoading = true, errorMessage = null)
+        val tree = _state.value.pickedTreeUri
+        if (tree != null) {
+            loadVideosFromTreeUri(tree)
+            return
+        }
+        launchLoad {
+            val context = getApplication<Application>()
+            val dir = _state.value.currentDirectory
+            // MediaStore 查询与私有目录扫描并行
+            val mediaStore = async(Dispatchers.IO) { VideoUtils.scanVideos(context, dir) }
+            // 合并应用私有 /rotated 目录下的转换产物（MediaStore 不索引 Android/data/<pkg>/files/）
+            val converted = async(Dispatchers.IO) { VideoUtils.scanConvertedDir(context) }
+            (mediaStore.await() + converted.await()).distinctBy { it.uri.toString() }
+        }
+    }
+
+    private fun launchLoad(block: suspend kotlinx.coroutines.CoroutineScope.() -> List<VideoInfo>) {
+        // 新的扫描开始前取消上一次，避免快速切换目录时旧结果覆盖新结果
+        loadJob?.cancel()
+        rotationJob?.cancel()
+        loadJob = viewModelScope.launch {
+            _state.update { it.copy(isLoading = true, errorMessage = null) }
             try {
-                val context = getApplication<Application>()
-                val dir = _state.value.currentDirectory
-                val mediaStoreVideos = withContext(Dispatchers.IO) {
-                    VideoUtils.scanVideos(context, dir)
-                }
-                // 合并应用私有 /rotated 目录下的转换产物
-                // （MediaStore 默认不索引 Android/data/<pkg>/files/，需单独扫描）
-                val convertedVideos = withContext(Dispatchers.IO) {
-                    VideoUtils.scanConvertedDir(context)
-                }
-                // 按 uri 去重（同文件可能被两条路径都找到）
-                rawVideos = (mediaStoreVideos + convertedVideos)
-                    .distinctBy { it.uri.toString() }
+                rawVideos = block()
                 applySort()
-                _state.value = _state.value.copy(isLoading = false)
+                _state.update { it.copy(isLoading = false, hasLoaded = true) }
+                fillMissingRotation()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _state.value = _state.value.copy(
-                    isLoading = false,
-                    errorMessage = e.message ?: "加载失败"
-                )
+                _state.update { it.copy(isLoading = false, hasLoaded = true, errorMessage = e.message ?: e.javaClass.simpleName) }
             }
         }
     }
 
+    /**
+     * Android 10 及以下 MediaStore 不提供视频旋转角：列表先按未知显示，
+     * 再在后台（限 4 并发）逐个读取，读完一次性刷新 —— 不阻塞首屏。
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun fillMissingRotation() {
+        val unknown = rawVideos.filter { it.rotation == ROTATION_UNKNOWN }
+        if (unknown.isEmpty()) return
+        val context = getApplication<Application>()
+        rotationJob = viewModelScope.launch {
+            val io = Dispatchers.IO.limitedParallelism(4)
+            val resolved = unknown.map { v ->
+                async(io) { v.uri.toString() to VideoUtils.getRotation(context, v.uri) }
+            }.map { it.await() }.toMap()
+            rawVideos = rawVideos.map { v ->
+                resolved[v.uri.toString()]?.let { v.copy(rotation = it) } ?: v
+            }
+            applySort()
+        }
+    }
+
+    private var lastOutputRevision = -1
+
+    /**
+     * 转换产物增删（转换完成、反向重转、删除文件）后重扫，让列表与磁盘一致。
+     * 只在版本号真正变化时触发 —— 页面重新进入（如从播放页返回）不会重扫。
+     */
+    fun syncOutputRevision(revision: Int) {
+        val changed = lastOutputRevision >= 0 && revision != lastOutputRevision
+        lastOutputRevision = revision
+        if (changed && _state.value.hasLoaded) loadVideos()
+    }
+
     fun setSortKey(key: SortKey) {
-        _state.value = _state.value.copy(sortKey = key)
+        _state.update { it.copy(sortKey = key) }
         applySort()
+    }
+
+    fun setFilter(filter: VideoFilter) {
+        _state.update { it.copy(filter = filter, selectedUris = emptySet()) }
+        AppPrefs.setListFilter(getApplication(), filter.name)
+    }
+
+    fun setDedupe(enabled: Boolean) {
+        _state.update { it.copy(dedupe = enabled, selectedUris = emptySet()) }
+        AppPrefs.setListDedupe(getApplication(), enabled)
     }
 
     private fun applySort() {
@@ -99,17 +175,33 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
             SortKey.SIZE_DESC -> rawVideos.sortedByDescending { it.size }
             SortKey.DURATION_DESC -> rawVideos.sortedByDescending { it.duration }
         }
-        _state.value = _state.value.copy(videos = sorted)
+        _state.update { it.copy(videos = sorted) }
     }
 
+    /**
+     * 权限结果回调。只在状态变化时触发扫描 —— 之前 MainActivity 每次重组都会调用一次，
+     * 切主题 / 返回列表都会整盘重扫。
+     */
     fun setPermissionGranted(granted: Boolean) {
-        _state.value = _state.value.copy(hasPermission = granted)
-        if (granted) loadVideos()
+        val before = _state.value
+        _state.update { it.copy(hasPermission = granted) }
+        if (granted && !before.hasLoaded && !before.isLoading &&
+            AppPrefs.getAutoScan(getApplication())
+        ) {
+            loadVideos()
+        }
     }
 
     fun navigateToParent(): Boolean {
-        val current = _state.value.currentDirectory
-        val parent = File(current).parent
+        if (_state.value.pickedTreeUri != null) {
+            // 当前浏览的是 SAF 文件夹：外部存储的文件夹回到其上级路径，其他提供方回到默认目录
+            val path = _state.value.pickedTreeUri
+                ?.takeIf { it.authority == "com.android.externalstorage.documents" }
+                ?.let { VideoUtils.treeDocIdToPath(VideoUtils.describeTreeUri(it)) }
+            setDirectory(path?.let { File(it).parent } ?: VideoUtils.getDefaultVideoDirectory())
+            return true
+        }
+        val parent = File(_state.value.currentDirectory).parent
         if (parent != null) {
             setDirectory(parent)
             return true
@@ -122,31 +214,29 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun toggleSelectMode() {
-        _state.value = _state.value.copy(
-            isSelectMode = !_state.value.isSelectMode,
-            selectedUris = emptySet()
-        )
+        _state.update { it.copy(isSelectMode = !it.isSelectMode, selectedUris = emptySet()) }
     }
 
     fun exitSelectMode() {
-        _state.value = _state.value.copy(isSelectMode = false, selectedUris = emptySet())
+        _state.update { it.copy(isSelectMode = false, selectedUris = emptySet()) }
+    }
+
+    fun enterSelectMode(initial: Uri) {
+        _state.update { it.copy(isSelectMode = true, selectedUris = setOf(initial.toString())) }
     }
 
     fun toggleSelect(uri: Uri) {
-        val s = _state.value.selectedUris.toMutableSet()
         val key = uri.toString()
-        if (s.contains(key)) s.remove(key) else s.add(key)
-        _state.value = _state.value.copy(selectedUris = s)
+        _state.update { s -> s.copy(selectedUris = if (key in s.selectedUris) s.selectedUris - key else s.selectedUris + key) }
     }
 
-    fun selectAll() {
-        _state.value = _state.value.copy(
-            selectedUris = _state.value.videos.map { it.uri.toString() }.toSet()
-        )
+    /** 全选当前可见（已筛选 / 去重后）的视频 */
+    fun selectAll(visible: List<VideoInfo>) {
+        _state.update { it.copy(selectedUris = visible.map { v -> v.uri.toString() }.toSet()) }
     }
 
     fun deselectAll() {
-        _state.value = _state.value.copy(selectedUris = emptySet())
+        _state.update { it.copy(selectedUris = emptySet()) }
     }
 
     fun selectedVideos(): List<VideoInfo> {
@@ -154,67 +244,56 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
         return _state.value.videos.filter { keys.contains(it.uri.toString()) }
     }
 
-    /** 记录最近播放的视频所在目录，供路径栏点击跳转 */
-    fun rememberPlayedVideo(uri: Uri) {
-        val parent = VideoUtils.getParentPath(getApplication(), uri) ?: return
-        if (_state.value.lastPlayedParent != parent) {
-            _state.value = _state.value.copy(lastPlayedParent = parent)
+    /**
+     * 记录最近播放的视频所在目录，供路径栏点击跳转。
+     * 直接用扫描时拿到的路径，不再在点击时同步查询 ContentResolver（会卡住进入播放页）。
+     */
+    fun rememberPlayedVideo(video: VideoInfo) {
+        val parent = video.path?.let { File(it).parent }
+        _state.update {
+            it.copy(
+                lastPlayedParent = parent ?: it.lastPlayedParent,
+                lastPlayedVideoUri = video.uri.toString()
+            )
         }
-        // 同时记录 URI，供回到列表时定位滚动
-        _state.value = _state.value.copy(lastPlayedVideoUri = uri.toString())
     }
 
     /** UI 已消费完滚动定位，清除标记避免重复滚动 */
     fun consumeLastPlayedUri() {
         if (_state.value.lastPlayedVideoUri != null) {
-            _state.value = _state.value.copy(lastPlayedVideoUri = null)
+            _state.update { it.copy(lastPlayedVideoUri = null) }
         }
     }
 
     /** 跳转到上次播放视频所在的目录（如与当前相同则忽略） */
     fun jumpToLastPlayedParent() {
         val target = _state.value.lastPlayedParent ?: return
-        if (target != _state.value.currentDirectory) {
+        if (target != _state.value.currentDirectory || _state.value.pickedTreeUri != null) {
             setDirectory(target)
         }
     }
 
     /**
-     * 用户在系统文件选择器里选了一个文件夹（SAF treeUri）。
-     * 清空 lastPlayedParent 提示，扫描该子树下的视频。
+     * 用户在系统文件选择器里选了一个要浏览的文件夹（SAF treeUri），扫描该子树下的视频。
+     * 注意：这与「转换配置」里的自定义输出目录是两回事，之前两者共用一个状态，
+     * 选浏览目录会顺带改掉输出目录，反之亦然。
      */
     fun setPickedTreeUri(uri: Uri) {
-        _state.value = _state.value.copy(pickedTreeUri = uri)
+        _state.update {
+            it.copy(pickedTreeUri = uri, currentDirectory = VideoUtils.describeTreeUri(uri))
+        }
         loadVideosFromTreeUri(uri)
     }
 
     /** 清除已选的 SAF 目录，回到默认 MediaStore 扫描 */
     fun clearPickedTreeUri() {
-        _state.value = _state.value.copy(pickedTreeUri = null, currentDirectory = VideoUtils.getDefaultVideoDirectory())
-        loadVideos()
+        setDirectory(VideoUtils.getDefaultVideoDirectory())
     }
 
     private fun loadVideosFromTreeUri(uri: Uri) {
-        viewModelScope.launch {
-            _state.value = _state.value.copy(isLoading = true, errorMessage = null)
-            try {
-                val context = getApplication<Application>()
-                val displayPath = VideoUtils.describeTreeUri(uri)
-                val videos = withContext(Dispatchers.IO) {
-                    VideoUtils.scanVideosFromTreeUri(context, uri)
-                }
-                rawVideos = videos
-                applySort()
-                _state.value = _state.value.copy(
-                    isLoading = false,
-                    currentDirectory = displayPath
-                )
-            } catch (e: Exception) {
-                _state.value = _state.value.copy(
-                    isLoading = false,
-                    errorMessage = e.message ?: "加载失败"
-                )
-            }
+        launchLoad {
+            val context = getApplication<Application>()
+            withContext(Dispatchers.IO) { VideoUtils.scanVideosFromTreeUri(context, uri) }
         }
     }
 }

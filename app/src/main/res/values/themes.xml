@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.VideoRotator" parent="android:Theme.Material.Light.NoActionBar">
+    <!-- AppCompat 主题：MainActivity 继承 AppCompatActivity 以支持应用内语言切换（Android 13 以下） -->
+    <style name="Theme.VideoRotator" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>

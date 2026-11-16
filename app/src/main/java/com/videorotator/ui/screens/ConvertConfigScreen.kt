@@ -1,5 +1,8 @@
 package com.videorotator.ui.screens
 
+import com.videorotator.R
+import androidx.compose.ui.res.stringResource
+import android.net.Uri
 import android.os.Environment
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -34,7 +37,11 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,82 +59,111 @@ import com.videorotator.ui.theme.PurpleBg
 import com.videorotator.ui.theme.PurpleDark
 import com.videorotator.ui.theme.PurpleLight
 import com.videorotator.ui.theme.PurplePrimary
-import com.videorotator.ui.theme.White
-import java.io.File
+import com.videorotator.ui.components.ScreenHorizontalPadding
+import com.videorotator.ui.components.ScreenTitle
+import com.videorotator.ui.components.ScreenTopPadding
+import com.videorotator.ui.theme.CardSurface
+import com.videorotator.ui.theme.OnPrimary
+import com.videorotator.utils.AppPrefs
+import com.videorotator.utils.OutputTarget
+import com.videorotator.utils.VideoUtils
 
 @Composable
 fun ConvertConfigScreen(
-    pickedTreeUriDescription: String? = null,
-    onPickDirectory: () -> Unit = {},
-    onClearPickedDirectory: () -> Unit = {}
+    outputTreeUri: Uri? = null,
+    onPickOutputDirectory: () -> Unit = {},
+    onClearOutputDirectory: () -> Unit = {}
 ) {
-    var defaultOutputDir by remember {
-        mutableStateOf(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES).absolutePath
-        )
+    val context = LocalContext.current
+    // 之前这些选项只存在 remember 里：切 Tab 就丢失，转换时也从不读取
+    var outputTarget by remember { mutableStateOf(AppPrefs.getOutputTarget(context)) }
+    var clockwise by remember { mutableStateOf(AppPrefs.isClockwise(context)) }
+    val storageInfo = remember { getStorageInfo(context) }
+
+    // 点「自定义路径」时若还没选过文件夹，先唤起选择器，选完再切换
+    var waitingForPick by remember { mutableStateOf(false) }
+    LaunchedEffect(outputTreeUri) {
+        if (outputTreeUri != null && waitingForPick) {
+            waitingForPick = false
+            outputTarget = OutputTarget.CUSTOM
+            AppPrefs.setOutputTarget(context, OutputTarget.CUSTOM)
+        } else if (outputTarget == OutputTarget.CUSTOM && outputTreeUri == null) {
+            // 自定义文件夹被清除：回退到 Movies
+            outputTarget = OutputTarget.MOVIES
+            AppPrefs.setOutputTarget(context, OutputTarget.MOVIES)
+        }
     }
-    var autoRotate by remember { mutableStateOf(true) }
-    var keepOriginal by remember { mutableStateOf(true) }
-    var highQuality by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, top = ScreenTopPadding, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 标题
-        Text(
-            "转换配置",
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold,
-            color = PurpleDark,
-            modifier = Modifier.padding(vertical = 8.dp)
-        )
+        ScreenTitle(stringResource(R.string.tab_config))
 
         // 输出目录设置
         ConfigSection(
             icon = Icons.Filled.Folder,
-            title = "输出目录",
-            description = "转换后视频的默认保存位置"
+            title = stringResource(R.string.output_dir),
+            description = stringResource(R.string.output_dir_desc)
         ) {
-            Surface(
-                onClick = onPickDirectory,
-                shape = RoundedCornerShape(12.dp),
-                color = PurpleLight,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Filled.Folder,
-                        contentDescription = "选择文件夹",
-                        tint = PurplePrimary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            pickedTreeUriDescription ?: defaultOutputDir,
-                            fontSize = 13.sp,
-                            color = PurpleDark,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            if (pickedTreeUriDescription != null) "已通过系统选择器指定" else "点击选择其他文件夹",
-                            fontSize = 11.sp,
-                            color = PurplePrimary.copy(alpha = 0.8f),
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutputTarget.values().forEach { target ->
+                    val selected = target == outputTarget
+                    val path = when (target) {
+                        OutputTarget.APP_PRIVATE -> VideoUtils.privateOutputDir(context).absolutePath
+                        OutputTarget.CUSTOM -> outputTreeUri?.let { VideoUtils.describeTreeUri(it) } ?: stringResource(R.string.not_selected)
+                        else -> Environment.getExternalStoragePublicDirectory(target.publicDir).absolutePath
                     }
-                    if (pickedTreeUriDescription != null) {
-                        Spacer(Modifier.width(4.dp))
-                        TextButton(onClick = onClearPickedDirectory) {
-                            Text("清除", color = PurplePrimary, fontSize = 13.sp)
+                    Surface(
+                        onClick = {
+                            if (target == OutputTarget.CUSTOM && outputTreeUri == null) {
+                                waitingForPick = true
+                                onPickOutputDirectory()
+                            } else {
+                                outputTarget = target
+                                AppPrefs.setOutputTarget(context, target)
+                            }
+                        },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (selected) PurpleLight else Color.Transparent,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = selected,
+                                onClick = null,
+                                colors = RadioButtonDefaults.colors(selectedColor = PurplePrimary),
+                                modifier = Modifier.padding(12.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f).padding(vertical = 6.dp)) {
+                                Text(
+                                    stringResource(target.labelRes),
+                                    fontSize = 14.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                    color = PurpleDark
+                                )
+                                Text(
+                                    path,
+                                    fontSize = 11.sp,
+                                    color = Color.Gray,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (target == OutputTarget.CUSTOM && outputTreeUri != null) {
+                                TextButton(onClick = onPickOutputDirectory) {
+                                    Text(stringResource(R.string.replace), color = PurplePrimary, fontSize = 13.sp)
+                                }
+                                TextButton(onClick = onClearOutputDirectory) {
+                                    Text(stringResource(R.string.clear), color = Color.Gray, fontSize = 13.sp)
+                                }
+                            }
                         }
                     }
                 }
@@ -137,8 +173,8 @@ fun ConvertConfigScreen(
         // 旋转设置
         ConfigSection(
             icon = Icons.Filled.Rotate90DegreesCw,
-            title = "旋转方向",
-            description = "选择视频旋转的方向"
+            title = stringResource(R.string.rotate_direction),
+            description = stringResource(R.string.default_direction_desc)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -146,40 +182,23 @@ fun ConvertConfigScreen(
             ) {
                 RotationOption(
                     icon = Icons.Filled.Rotate90DegreesCw,
-                    label = "顺时针90°",
-                    selected = autoRotate,
-                    onClick = { autoRotate = true },
+                    label = stringResource(R.string.cw_90),
+                    selected = clockwise,
+                    onClick = {
+                        clockwise = true
+                        AppPrefs.setClockwise(context, true)
+                    },
                     modifier = Modifier.weight(1f)
                 )
                 RotationOption(
                     icon = Icons.Filled.Rotate90DegreesCcw,
-                    label = "逆时针90°",
-                    selected = !autoRotate,
-                    onClick = { autoRotate = false },
+                    label = stringResource(R.string.ccw_90),
+                    selected = !clockwise,
+                    onClick = {
+                        clockwise = false
+                        AppPrefs.setClockwise(context, false)
+                    },
                     modifier = Modifier.weight(1f)
-                )
-            }
-        }
-
-        // 质量设置
-        ConfigSection(
-            icon = Icons.Filled.Tune,
-            title = "输出质量",
-            description = "配置视频转换的质量选项"
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SwitchSettingItem(
-                    title = "保留原始文件",
-                    description = "转换后保留原始视频文件",
-                    checked = keepOriginal,
-                    onCheckedChange = { keepOriginal = it }
-                )
-                Divider(color = PurpleLight)
-                SwitchSettingItem(
-                    title = "高质量模式",
-                    description = "使用更高质量的编码（速度较慢）",
-                    checked = highQuality,
-                    onCheckedChange = { highQuality = it }
                 )
             }
         }
@@ -187,18 +206,18 @@ fun ConvertConfigScreen(
         // 存储信息
         ConfigSection(
             icon = Icons.Filled.SdStorage,
-            title = "存储信息",
-            description = "设备存储状态"
+            title = stringResource(R.string.storage_info),
+            description = stringResource(R.string.storage_info_desc)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                StorageInfoItem("内部存储", getStorageInfo())
+                StorageInfoItem(stringResource(R.string.internal_storage), storageInfo)
             }
         }
 
         // 提示
         Card(
             shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = PurpleLight.copy(alpha = 0.5f)),
+            colors = CardDefaults.cardColors(containerColor = PurpleLight.copy(alpha = 0.6f)),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -213,7 +232,7 @@ fun ConvertConfigScreen(
                 )
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    "提示：旋转转换通过修改元数据实现，不会重新编码视频，因此速度极快且画质无损。",
+                    stringResource(R.string.config_tip),
                     fontSize = 13.sp,
                     color = PurpleDark,
                     lineHeight = 20.sp
@@ -232,7 +251,7 @@ private fun ConfigSection(
 ) {
     Card(
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = White),
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -283,7 +302,8 @@ private fun RotationOption(
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = if (selected) PurplePrimary else PurpleLight,
-        modifier = modifier.clickable(onClick = onClick)
+        onClick = onClick,
+        modifier = modifier
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -292,7 +312,7 @@ private fun RotationOption(
             Icon(
                 icon,
                 null,
-                tint = if (selected) White else PurplePrimary,
+                tint = if (selected) OnPrimary else PurplePrimary,
                 modifier = Modifier.size(28.dp)
             )
             Spacer(Modifier.height(8.dp))
@@ -300,47 +320,9 @@ private fun RotationOption(
                 label,
                 fontSize = 13.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                color = if (selected) White else PurpleDark
+                color = if (selected) OnPrimary else PurpleDark
             )
         }
-    }
-}
-
-@Composable
-private fun SwitchSettingItem(
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                title,
-                fontWeight = FontWeight.Medium,
-                fontSize = 15.sp,
-                color = PurpleDark
-            )
-            Text(
-                description,
-                fontSize = 12.sp,
-                color = Color.Gray
-            )
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = White,
-                checkedTrackColor = PurplePrimary,
-                uncheckedThumbColor = White,
-                uncheckedTrackColor = PurpleLight
-            )
-        )
     }
 }
 
@@ -355,13 +337,13 @@ private fun StorageInfoItem(label: String, info: String) {
     }
 }
 
-private fun getStorageInfo(): String {
+private fun getStorageInfo(context: android.content.Context): String {
     return try {
         val stat = android.os.StatFs(Environment.getExternalStorageDirectory().path)
         val available = stat.availableBytes / (1024.0 * 1024.0 * 1024.0)
         val total = stat.totalBytes / (1024.0 * 1024.0 * 1024.0)
-        "%.1f GB / %.1f GB 可用".format(available, total)
+        context.getString(R.string.storage_available, available, total)
     } catch (e: Exception) {
-        "无法获取"
+        context.getString(R.string.storage_unavailable)
     }
 }

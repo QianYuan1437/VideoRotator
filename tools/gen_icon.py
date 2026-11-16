@@ -4,17 +4,21 @@ VideoRotator 启动图标生成器
 设计：VR 字母组合标记
   - V 只保留左侧斜线，底部与 R 的左侧竖线平齐连接
   - 字母左右各一条旋转箭头弧线包络（顺时针旋转感）
+  - 所有笔画（字母、弧线）统一线宽，端点 / 拐角 / 箭头全部圆角
 输出：
   - legacy PNG (mdpi~xxxhdpi) + round 版本
   - 自适应图标前景 PNG (各密度)
+用法：python3 tools/gen_icon.py
 """
 import math
 import os
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageDraw
 
 S = 1000          # 设计空间边长
 SS = 4            # 超采样倍数
 N = S * SS        # 实际渲染边长
+
+W = 76            # 统一笔画宽度（设计空间）
 
 C1 = (0xB3, 0x9D, 0xDB)   # 浅紫（左上）
 C2 = (0x7E, 0x57, 0xC2)   # 深紫（右下）
@@ -22,68 +26,102 @@ C2 = (0x7E, 0x57, 0xC2)   # 深紫（右下）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RES = os.path.join(_PROJECT_ROOT, "app", "src", "main", "res")
 
-def P(x, y):
-    """设计空间 -> 渲染空间"""
-    return (x * SS, y * SS)
 
-def bb(cx, cy, r):
-    """圆的外接矩形（渲染空间）"""
-    return [P(cx - r, cy - r), P(cx + r, cy + r)]
+class Pen:
+    """在 n x n 的灰度蒙版上用圆头圆角的粗线绘制（坐标为 1000 设计空间）"""
 
-class Glyph:
-    """在 1000x1000 设计空间绘制白色字形蒙版"""
+    def __init__(self, n):
+        self.k = n / S
+        self.img = Image.new("L", (n, n), 0)
+        self.d = ImageDraw.Draw(self.img)
 
-    def __init__(self, draw):
-        self.d = draw
+    def _p(self, x, y):
+        return (x * self.k, y * self.k)
 
-    def poly(self, pts, v=255):
-        self.d.polygon([P(*p) for p in pts], fill=v)
+    def dot(self, x, y, r):
+        cx, cy = self._p(x, y)
+        rr = r * self.k
+        self.d.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=255)
 
-    def rect(self, x0, y0, x1, y1, v=255):
-        self.d.rectangle([P(x0, y0), P(x1, y1)], fill=v)
+    def polyline(self, pts, w=W):
+        """折线：线段 + 每个顶点画圆，得到圆头圆角"""
+        self.d.line([self._p(*p) for p in pts], fill=255, width=max(1, round(w * self.k)))
+        for p in pts:
+            self.dot(*p, w / 2)
 
-    def ring(self, cx, cy, r, w, a0, a1):
-        """居中于半径 r 的圆弧带（扇形相减）"""
-        self.d.pieslice(bb(cx, cy, r + w / 2), a0, a1, fill=255)
-        self.d.pieslice(bb(cx, cy, r - w / 2), a0, a1, fill=0)
+    def arc(self, cx, cy, r, a0, a1, w=W):
+        """圆弧笔画（角度为 PIL 约定：从 3 点钟方向顺时针，单位度）"""
+        if a1 < a0:
+            a1 += 360
+        steps = max(8, int((a1 - a0) * 2))
+        pts = []
+        for i in range(steps + 1):
+            a = math.radians(a0 + (a1 - a0) * i / steps)
+            pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+        self.polyline(pts, w)
 
-    def head(self, cx, cy, r, ang, reach=38, back=18, half=33):
-        """在 ang 度处沿切线绘制箭头三角形"""
-        a = math.radians(ang)
-        px, py = cx + r * math.cos(a), cy + r * math.sin(a)
-        tx, ty = -math.sin(a), math.cos(a)      # 角度增加方向的单位切线
-        ox, oy = -ty, tx                        # 法线
-        tip = P(px + reach * tx, py + reach * ty)
-        base = (px - back * tx, py - back * ty)
-        c1 = P(base[0] + half * ox, base[1] + half * oy)
-        c2 = P(base[0] - half * ox, base[1] - half * oy)
-        self.d.polygon([tip, c1, c2], fill=255)
+    def rounded_triangle(self, pts, corner):
+        """圆角三角形：内缩三角形 ⊕ 半径 corner 的圆（闵可夫斯基和）"""
+        self.d.polygon([self._p(*p) for p in pts], fill=255)
+        self.polyline(list(pts) + [pts[0]], corner * 2)
 
-    def draw_letters(self):
-        # ---- V 左侧斜线：顶边 (182..256, 250) -> 底边 (486..546, 750)，与 R 竖线底部齐平连接 ----
-        self.poly([(182, 250), (256, 250), (546, 750), (486, 750)])
 
-        # ---- R 左侧竖线 ----
-        self.rect(486, 250, 546, 750)
+def arrow_head(pen, cx, cy, r, ang):
+    """在圆弧 ang 度处沿切线方向（角度增大方向）画圆角箭头"""
+    corner = W * 0.2
+    reach = W * 1.0                          # 箭尖超出弧端的距离
+    back = W * 0.3                           # 箭头底边落后于弧端的距离
+    half = W * 0.85                          # 底边半宽
+    a = math.radians(ang)
+    px, py = cx + r * math.cos(a), cy + r * math.sin(a)
+    # 箭头朝向取弧端前方半个箭头处的切线，让箭头顺着弧线弯曲方向，不向外撇
+    h = a + reach / (2 * r)
+    tx, ty = -math.sin(h), math.cos(h)       # 切线
+    ox, oy = -ty, tx                         # 法线
+    tip = (px + reach * tx, py + reach * ty)
+    bx, by = px - back * tx, py - back * ty
+    c1 = (bx + half * ox, by + half * oy)
+    c2 = (bx - half * ox, by - half * oy)
+    pen.rounded_triangle([tip, c1, c2], corner)
 
-        # ---- R 肚：右半环（外 r=120 / 内 r=60，圆心 666,370）+ 上下横梁 ----
-        self.d.pieslice(bb(666, 370, 120), -90, 90, fill=255)
-        self.d.pieslice(bb(666, 370, 60), -90, 90, fill=0)
-        self.rect(486, 250, 666, 310)
-        self.rect(486, 430, 666, 490)
 
-        # ---- R 斜腿 ----
-        self.poly([(549, 430), (624, 430), (804, 750), (729, 750)])
+LETTER_SCALE = 0.8   # 字母相对画布中心的缩放，给两侧箭头留出间距
 
-    def draw_arrows(self):
-        # ---- 左旋转箭头：130° -> 230°，箭头在 230°（左上），切线朝右上 ----
-        self.ring(500, 500, 440, 40, 130, 230)
-        self.head(500, 500, 440, 230)
 
-        # ---- 右旋转箭头：310° -> 50°，箭头在 50°（右下），切线朝左下 ----
-        self.ring(500, 500, 440, 40, 310, 360)
-        self.ring(500, 500, 440, 40, 0, 50)
-        self.head(500, 500, 440, 50)
+def _L(x, y):
+    """字母坐标：以 (500, 500) 为中心缩放"""
+    return (500 + (x - 500) * LETTER_SCALE, 500 + (y - 500) * LETTER_SCALE)
+
+
+def render_glyph(n):
+    """返回 n x n 的白色字形 RGBA（透明底）"""
+    pen = Pen(n)
+
+    # ---- V 左侧斜线 + R 竖线：一笔折线，底部尖角处圆角相连 ----
+    pen.polyline([_L(226, 262), _L(512, 738), _L(512, 262)])
+
+    # ---- R 肚：上横 → 半圆 → 下横，一笔完成 ----
+    top, bottom, bx = 262, 482, 640
+    rr = (bottom - top) / 2
+    pen.polyline([_L(512, top), _L(bx, top)])
+    cx, cy = _L(bx, top + rr)
+    pen.arc(cx, cy, rr * LETTER_SCALE, -90, 90)
+    pen.polyline([_L(bx, bottom), _L(512, bottom)])
+
+    # ---- R 斜腿 ----
+    pen.polyline([_L(600, bottom), _L(772, 738)])
+
+    # ---- 旋转箭头：左弧 130°→228°（箭头朝右上），右弧 310°→48°（箭头朝左下）----
+    R = 420
+    pen.arc(500, 500, R, 132, 226)
+    arrow_head(pen, 500, 500, R, 226)
+    pen.arc(500, 500, R, 312, 406)
+    arrow_head(pen, 500, 500, R, 46)
+
+    glyph = Image.new("RGBA", (n, n), (255, 255, 255, 0))
+    glyph.putalpha(pen.img)
+    return glyph
+
 
 def make_gradient(n):
     """对角线性渐变：左上浅紫 -> 右下深紫"""
@@ -96,45 +134,6 @@ def make_gradient(n):
             px[x, y] = tuple(int(C1[i] + (C2[i] - C1[i]) * t) for i in range(3))
     return img.resize((n, n), Image.BICUBIC)
 
-def render_glyph(n):
-    """返回 n x n 的白色字形 RGBA（透明底）"""
-    scale = n / S
-
-    # 包一层，把 P/bb 重映射到目标尺寸
-    class Rasterizer(Glyph):
-        def poly(self, pts, v=255):
-            self.d.polygon([(x * scale, y * scale) for x, y in pts], fill=v)
-        def rect(self, x0, y0, x1, y1, v=255):
-            self.d.rectangle([x0 * scale, y0 * scale, x1 * scale, y1 * scale], fill=v)
-        def ring(self, cx, cy, r, w, a0, a1):
-            self.d.pieslice([(cx - r - w / 2) * scale, (cy - r - w / 2) * scale,
-                             (cx + r + w / 2) * scale, (cy + r + w / 2) * scale], a0, a1, fill=255)
-            self.d.pieslice([(cx - r + w / 2) * scale, (cy - r + w / 2) * scale,
-                             (cx + r - w / 2) * scale, (cy + r - w / 2) * scale], a0, a1, fill=0)
-        def head(self, cx, cy, r, ang, reach=38, back=18, half=33):
-            a = math.radians(ang)
-            px, py = cx + r * math.cos(a), cy + r * math.sin(a)
-            tx, ty = -math.sin(a), math.cos(a)
-            ox, oy = -ty, tx
-            tip = ((px + reach * tx) * scale, (py + reach * ty) * scale)
-            bx, by = px - back * tx, py - back * ty
-            c1 = ((bx + half * ox) * scale, (by + half * oy) * scale)
-            c2 = ((bx - half * ox) * scale, (by - half * oy) * scale)
-            self.d.polygon([tip, c1, c2], fill=255)
-
-    # 字母与箭头分层绘制（箭头环用扇形相减，不能画在同一层上），再取并集
-    letters = Image.new("L", (n, n), 0)
-    arrows = Image.new("L", (n, n), 0)
-    rz = Rasterizer(None)
-    rz.d = ImageDraw.Draw(letters)
-    rz.draw_letters()
-    rz.d = ImageDraw.Draw(arrows)
-    rz.draw_arrows()
-    mask = ImageChops.lighter(letters, arrows)
-
-    glyph = Image.new("RGBA", (n, n), (255, 255, 255, 0))
-    glyph.putalpha(mask)
-    return glyph
 
 def scale_about_center(img, factor):
     """以中心缩放并保持画布尺寸"""
@@ -145,12 +144,13 @@ def scale_about_center(img, factor):
     canvas.paste(small, ((w - nw) // 2, (w - nw) // 2))
     return canvas
 
+
 def main():
     glyph_hi = render_glyph(N)                       # 4000px 字形
     gradient_hi = make_gradient(N)
 
     # legacy 图标内容缩放：给圆形遮罩留出边距，避免箭头贴边
-    glyph_legacy = scale_about_center(glyph_hi, 0.86)
+    glyph_legacy = scale_about_center(glyph_hi, 0.84)
 
     # ---------- legacy 图标 ----------
     densities = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
@@ -175,10 +175,9 @@ def main():
         round_icon.save(os.path.join(folder, "ic_launcher_round.png"))
 
     # ---------- 自适应图标前景 ----------
-    # 内容整体（含箭头）最大半径 474/500，缩放 0.58 后最大直径约 59.4dp，
-    # 严格落在 66dp 安全区内（各 OEM 激进遮罩下也不会裁掉 VR 字母）
+    # 内容最大半径约 476/500，缩放 0.6 后直径约 61.7dp，落在 66dp 安全区内
     fg_sizes = {"mdpi": 108, "hdpi": 162, "xhdpi": 216, "xxhdpi": 324, "xxxhdpi": 432}
-    scaled = scale_about_center(glyph_hi, 0.58)
+    scaled = scale_about_center(glyph_hi, 0.6)
     for name, size in fg_sizes.items():
         folder = os.path.join(RES, f"mipmap-{name}")
         os.makedirs(folder, exist_ok=True)
@@ -186,6 +185,7 @@ def main():
             os.path.join(folder, "ic_launcher_foreground.png"))
 
     print("icons generated")
+
 
 if __name__ == "__main__":
     main()

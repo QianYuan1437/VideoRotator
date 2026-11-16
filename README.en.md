@@ -9,8 +9,11 @@
 
 - **Landscape → Portrait rotation**: video orientation is changed via `MediaExtractor + MediaMuxer + setOrientationHint` — no re-encoding, lossless quality, completes in seconds.
 - **Bilibili-style player**: playback speed (0.5x–2.0x), left-edge swipe for brightness, right-edge swipe for volume, vertical swipe for seeking, orientation lock, fullscreen, double-tap play/pause, auto-hiding controls.
-- **Conversion config**: rotation direction (CW/CCW 90°), selectable save path (app-private / Movies / DCIM / Download / custom), keep-original switches.
+- **Video list**: scanned with a single MediaStore query; converted sources and conversion outputs are badged on their cards, and the filter bar offers All / Not converted / Converted plus de-duplication.
+- **Conversion list**: jobs run in a serial, cancellable queue and survive process death; "Converted" gathers outputs from every save location with play, delete, reverse-rotate and sorting.
+- **Conversion config**: rotation direction (CW/CCW 90°) and default save location (app-private / Movies / DCIM / Download / custom), persisted and used by both single and batch conversion; originals are always kept.
 - **Theme customization**: 8 theme colors (two rows of swatches — Light Purple / Sakura Pink / Sky Blue / Mint Green / Vibrant Orange / Rose Red / Lemon Yellow / Graphite Gray), background mode (Light / Dark / Follow system), settings persisted.
+- **Multilingual UI**: Chinese / English / Follow system, applied instantly (on Android 13+ it also appears in the system per-app language settings).
 - **Unified rounded design**: cards & buttons 20dp, selection boxes 16dp, chips 12dp; bottom navigation bar with 28dp bottom corners adapted to rounded screen edges.
 
 ## Tech Stack

@@ -1,5 +1,8 @@
 package com.videorotator.ui.components
 
+import androidx.annotation.StringRes
+import com.videorotator.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,17 +28,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.videorotator.ui.theme.PurpleDark
 import com.videorotator.ui.theme.PurplePrimary
+import com.videorotator.ui.theme.OnPrimary
+import com.videorotator.ui.theme.PurpleLight
 import com.videorotator.ui.theme.White
 
 // 预定义主题色
 data class ThemeColor(
-    val name: String,
+    @StringRes val nameRes: Int,
     val primary: Color,
     val secondary: Color,
     val light: Color,
@@ -43,21 +49,21 @@ data class ThemeColor(
 )
 
 val themeColors = listOf(
-    ThemeColor("浅紫色", Color(0xFFB39DDB), Color(0xFF9575CD), Color(0xFFEDE7F6), Color(0xFFF8F4FC)),
-    ThemeColor("樱花粉", Color(0xFFF48FB1), Color(0xFFEC407A), Color(0xFFFCE4EC), Color(0xFFFDF2F5)),
-    ThemeColor("天空蓝", Color(0xFF90CAF9), Color(0xFF42A5F5), Color(0xFFE3F2FD), Color(0xFFF0F7FF)),
-    ThemeColor("薄荷绿", Color(0xFF80CBC4), Color(0xFF26A69A), Color(0xFFE0F2F1), Color(0xFFF0FAF9)),
-    ThemeColor("活力橙", Color(0xFFFFCC80), Color(0xFFFFA726), Color(0xFFFFF3E0), Color(0xFFFFFAF2)),
-    ThemeColor("玫瑰红", Color(0xFFE57373), Color(0xFFEF5350), Color(0xFFFFEBEE), Color(0xFFFFF5F5)),
-    ThemeColor("柠檬黄", Color(0xFFFFF59D), Color(0xFFFFEE58), Color(0xFFFFFDE7), Color(0xFFFFFEF0)),
-    ThemeColor("石墨灰", Color(0xFFB0BEC5), Color(0xFF78909C), Color(0xFFECEFF1), Color(0xFFF5F7FA))
+    ThemeColor(R.string.theme_purple, Color(0xFFB39DDB), Color(0xFF9575CD), Color(0xFFEDE7F6), Color(0xFFF8F4FC)),
+    ThemeColor(R.string.theme_pink, Color(0xFFF48FB1), Color(0xFFEC407A), Color(0xFFFCE4EC), Color(0xFFFDF2F5)),
+    ThemeColor(R.string.theme_blue, Color(0xFF90CAF9), Color(0xFF42A5F5), Color(0xFFE3F2FD), Color(0xFFF0F7FF)),
+    ThemeColor(R.string.theme_green, Color(0xFF80CBC4), Color(0xFF26A69A), Color(0xFFE0F2F1), Color(0xFFF0FAF9)),
+    ThemeColor(R.string.theme_orange, Color(0xFFFFCC80), Color(0xFFFFA726), Color(0xFFFFF3E0), Color(0xFFFFFAF2)),
+    ThemeColor(R.string.theme_red, Color(0xFFE57373), Color(0xFFEF5350), Color(0xFFFFEBEE), Color(0xFFFFF5F5)),
+    ThemeColor(R.string.theme_yellow, Color(0xFFFFF59D), Color(0xFFFFEE58), Color(0xFFFFFDE7), Color(0xFFFFFEF0)),
+    ThemeColor(R.string.theme_gray, Color(0xFFB0BEC5), Color(0xFF78909C), Color(0xFFECEFF1), Color(0xFFF5F7FA))
 )
 
 // 背景模式
-enum class BackgroundMode(val displayName: String) {
-    LIGHT("浅色"),
-    DARK("深色"),
-    SYSTEM("跟随系统")
+enum class BackgroundMode(@StringRes val labelRes: Int) {
+    LIGHT(R.string.mode_light),
+    DARK(R.string.mode_dark),
+    SYSTEM(R.string.mode_system)
 }
 
 @Composable
@@ -98,10 +104,10 @@ fun ThemeColorSelector(
         // 当前选中颜色名称
         Surface(
             shape = RoundedCornerShape(12.dp),
-            color = currentColor.light
+            color = PurpleLight
         ) {
             Text(
-                "当前主题：${currentColor.name}",
+                stringResource(R.string.current_theme, stringResource(currentColor.nameRes)),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = PurpleDark,
@@ -135,15 +141,15 @@ private fun ColorItem(
             if (isSelected) {
                 Icon(
                     Icons.Filled.Check,
-                    "已选择",
-                    tint = White,
+                    stringResource(R.string.selected),
+                    tint = if (color.primary.luminance() > 0.6f) Color(0xFF3A3A3A) else White,
                     modifier = Modifier.size(20.dp)
                 )
             }
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            color.name,
+            stringResource(color.nameRes),
             fontSize = 11.sp,
             color = if (isSelected) PurpleDark else Color.Gray,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
@@ -164,16 +170,15 @@ fun BackgroundModeSelector(
         BackgroundMode.values().forEach { mode ->
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = if (mode == currentMode) PurplePrimary else Color(0xFFF5F5F5),
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable { onModeSelected(mode) }
+                color = if (mode == currentMode) PurplePrimary else PurpleLight,
+                onClick = { onModeSelected(mode) },
+                modifier = Modifier.weight(1f)
             ) {
                 Text(
-                    mode.displayName,
+                    stringResource(mode.labelRes),
                     fontSize = 14.sp,
                     fontWeight = if (mode == currentMode) FontWeight.Bold else FontWeight.Medium,
-                    color = if (mode == currentMode) White else Color.Gray,
+                    color = if (mode == currentMode) OnPrimary else PurpleDark,
                     modifier = Modifier.padding(vertical = 12.dp),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )

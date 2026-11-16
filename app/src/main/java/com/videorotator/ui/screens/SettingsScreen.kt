@@ -1,5 +1,9 @@
 package com.videorotator.ui.screens
 
+import com.videorotator.utils.AppLocale
+import androidx.annotation.StringRes
+import com.videorotator.R
+import androidx.compose.ui.res.stringResource
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -18,8 +22,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.activity.ComponentActivity
-import androidx.appcompat.app.AppCompatDelegate
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.ExpandMore
@@ -62,6 +66,13 @@ import com.videorotator.ui.theme.PurpleDark
 import com.videorotator.ui.theme.PurpleLight
 import com.videorotator.ui.theme.PurplePrimary
 import com.videorotator.ui.theme.White
+import com.videorotator.ui.components.ScreenHorizontalPadding
+import com.videorotator.ui.components.ScreenTitle
+import com.videorotator.ui.components.ScreenTopPadding
+import com.videorotator.ui.theme.CardSurface
+import com.videorotator.ui.theme.OnPrimary
+import com.videorotator.utils.AppPrefs
+import com.videorotator.utils.Notifier
 import com.videorotator.utils.PlayerPrefs
 
 private val PLAYBACK_SPEED_OPTIONS = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
@@ -74,8 +85,24 @@ fun SettingsScreen(
     onBackgroundModeChanged: (BackgroundMode) -> Unit = {}
 ) {
     val context = LocalContext.current
-    var notificationsEnabled by remember { mutableStateOf(true) }
-    var autoScan by remember { mutableStateOf(true) }
+    // 之前这两个开关只存在 remember 里，没有任何实际作用
+    var notificationsEnabled by remember {
+        mutableStateOf(AppPrefs.getNotifyOnComplete(context) && Notifier.canPost(context))
+    }
+    var autoScan by remember { mutableStateOf(AppPrefs.getAutoScan(context)) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        notificationsEnabled = granted
+        AppPrefs.setNotifyOnComplete(context, granted)
+    }
+    val appVersion = remember {
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+    }
     var playbackSpeed by remember {
         mutableStateOf(PlayerPrefs.getPlaybackSpeed(context))
     }
@@ -91,29 +118,22 @@ fun SettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, top = ScreenTopPadding, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 标题
-        Text(
-            "软件设置",
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold,
-            color = PurpleDark,
-            modifier = Modifier.padding(vertical = 8.dp)
-        )
+        ScreenTitle(stringResource(R.string.tab_settings))
 
         // 外观设置
         SettingsSection(
             icon = Icons.Filled.Palette,
-            title = "外观",
-            description = "个性化应用外观"
+            title = stringResource(R.string.appearance),
+            description = stringResource(R.string.appearance_desc)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 // 主题色选择
                 Column {
                     Text(
-                        "主题颜色",
+                        stringResource(R.string.theme_color),
                         fontWeight = FontWeight.Medium,
                         fontSize = 15.sp,
                         color = PurpleDark
@@ -128,7 +148,7 @@ fun SettingsScreen(
                 // 背景模式选择
                 Column {
                     Text(
-                        "背景模式",
+                        stringResource(R.string.background_mode),
                         fontWeight = FontWeight.Medium,
                         fontSize = 15.sp,
                         color = PurpleDark
@@ -144,7 +164,7 @@ fun SettingsScreen(
                         color = PurpleLight
                     ) {
                         Text(
-                            "当前模式：${currentBackgroundMode.displayName}",
+                            stringResource(R.string.current_mode, stringResource(currentBackgroundMode.labelRes)),
                             fontSize = 13.sp,
                             color = PurpleDark,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
@@ -155,23 +175,23 @@ fun SettingsScreen(
         }
 
         // 语言设置
-        val context = LocalContext.current
-        var appLanguage by remember { mutableStateOf(PlayerPrefs.getLanguage(context)) }
+        // 以 AppCompat 保存的应用语言为准（API 33+ 也可能在系统设置里被改掉）
+        val appLanguage = remember { AppLocale.currentTag() }
         SettingsSection(
             icon = Icons.Filled.Language,
-            title = "语言",
-            description = "切换应用显示语言"
+            title = stringResource(R.string.language),
+            description = stringResource(R.string.language_desc)
         ) {
             Column {
                 Text(
-                    "选择界面语言",
+                    stringResource(R.string.language_choose),
                     fontWeight = FontWeight.Medium,
                     fontSize = 15.sp,
                     color = PurpleDark
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "切换后会立即生效；选择「跟随系统」则使用设备当前语言",
+                    stringResource(R.string.language_hint),
                     fontSize = 12.sp,
                     color = Color.Gray
                 )
@@ -180,9 +200,9 @@ fun SettingsScreen(
                     current = appLanguage,
                     onSelect = { tag ->
                         if (tag == appLanguage) return@LanguageSelector
-                        appLanguage = tag
                         PlayerPrefs.setLanguage(context, tag)
-                        applyLanguageAndRecreate(context, tag)
+                        // AppCompatActivity 会自动重建，Compose 随之按新语言加载字符串
+                        AppLocale.apply(tag)
                     }
                 )
             }
@@ -191,8 +211,8 @@ fun SettingsScreen(
         // 播放设置
         SettingsSection(
             icon = Icons.Filled.Brightness6,
-            title = "播放",
-            description = "配置播放器行为"
+            title = stringResource(R.string.playback),
+            description = stringResource(R.string.playback_desc)
         ) {
             // 默认倍速（点击整行展开下拉）
             Row(
@@ -205,13 +225,13 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "默认倍速",
+                        stringResource(R.string.default_speed),
                         fontWeight = FontWeight.Medium,
                         fontSize = 15.sp,
                         color = PurpleDark
                     )
                     Text(
-                        "打开播放器时使用的初始速度",
+                        stringResource(R.string.default_speed_desc),
                         fontSize = 12.sp,
                         color = Color.Gray
                     )
@@ -227,7 +247,7 @@ fun SettingsScreen(
                         Spacer(Modifier.width(4.dp))
                         Icon(
                             Icons.Filled.ExpandMore,
-                            contentDescription = "选择倍速",
+                            contentDescription = stringResource(R.string.choose_speed),
                             tint = PurplePrimary.copy(alpha = 0.7f),
                             modifier = Modifier.size(20.dp)
                         )
@@ -266,13 +286,13 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "自动播放",
+                        stringResource(R.string.auto_play),
                         fontWeight = FontWeight.Medium,
                         fontSize = 15.sp,
                         color = PurpleDark
                     )
                     Text(
-                        if (autoPlay) "打开视频后立即播放" else "打开视频后手动点播放",
+                        if (autoPlay) stringResource(R.string.auto_play_on) else stringResource(R.string.auto_play_off),
                         fontSize = 12.sp,
                         color = Color.Gray
                     )
@@ -284,7 +304,7 @@ fun SettingsScreen(
                         PlayerPrefs.setAutoPlay(context, it)
                     },
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = White,
+                        checkedThumbColor = OnPrimary,
                         checkedTrackColor = PurplePrimary,
                         uncheckedThumbColor = White,
                         uncheckedTrackColor = PurpleLight
@@ -296,8 +316,8 @@ fun SettingsScreen(
         // 通知设置
         SettingsSection(
             icon = Icons.Filled.Notifications,
-            title = "通知",
-            description = "管理应用通知"
+            title = stringResource(R.string.notifications),
+            description = stringResource(R.string.notifications_desc)
         ) {
             Row(
                 modifier = Modifier
@@ -308,22 +328,31 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "转换完成通知",
+                        stringResource(R.string.notify_done),
                         fontWeight = FontWeight.Medium,
                         fontSize = 15.sp,
                         color = PurpleDark
                     )
                     Text(
-                        "视频转换完成时发送通知",
+                        stringResource(R.string.notify_done_desc),
                         fontSize = 12.sp,
                         color = Color.Gray
                     )
                 }
                 Switch(
                     checked = notificationsEnabled,
-                    onCheckedChange = { notificationsEnabled = it },
+                    onCheckedChange = { enabled ->
+                        if (enabled && !Notifier.canPost(context) &&
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        ) {
+                            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            notificationsEnabled = enabled
+                            AppPrefs.setNotifyOnComplete(context, enabled)
+                        }
+                    },
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = White,
+                        checkedThumbColor = OnPrimary,
                         checkedTrackColor = PurplePrimary,
                         uncheckedThumbColor = White,
                         uncheckedTrackColor = PurpleLight
@@ -335,8 +364,8 @@ fun SettingsScreen(
         // 存储设置
         SettingsSection(
             icon = Icons.Filled.Folder,
-            title = "存储",
-            description = "管理应用存储"
+            title = stringResource(R.string.storage),
+            description = stringResource(R.string.storage_desc)
         ) {
             Row(
                 modifier = Modifier
@@ -347,22 +376,25 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "自动扫描",
+                        stringResource(R.string.auto_scan),
                         fontWeight = FontWeight.Medium,
                         fontSize = 15.sp,
                         color = PurpleDark
                     )
                     Text(
-                        "启动时自动扫描视频文件",
+                        stringResource(R.string.auto_scan_desc),
                         fontSize = 12.sp,
                         color = Color.Gray
                     )
                 }
                 Switch(
                     checked = autoScan,
-                    onCheckedChange = { autoScan = it },
+                    onCheckedChange = {
+                        autoScan = it
+                        AppPrefs.setAutoScan(context, it)
+                    },
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = White,
+                        checkedThumbColor = OnPrimary,
                         checkedTrackColor = PurplePrimary,
                         uncheckedThumbColor = White,
                         uncheckedTrackColor = PurpleLight
@@ -374,30 +406,30 @@ fun SettingsScreen(
         // 关于
         SettingsSection(
             icon = Icons.Filled.Info,
-            title = "关于",
-            description = "应用信息"
+            title = stringResource(R.string.about),
+            description = stringResource(R.string.about_desc)
         ) {
             SettingsItem(
-                title = "版本",
-                subtitle = "1.0.0",
+                title = stringResource(R.string.version),
+                subtitle = appVersion,
                 onClick = { showVersionDialog = true }
             )
             Divider(color = PurpleLight)
             SettingsItem(
-                title = "开源许可",
-                subtitle = "查看第三方库许可",
+                title = stringResource(R.string.licenses),
+                subtitle = stringResource(R.string.licenses_desc),
                 onClick = { showLicensesDialog = true }
             )
             Divider(color = PurpleLight)
             SettingsItem(
-                title = "隐私政策",
-                subtitle = "查看隐私政策",
+                title = stringResource(R.string.privacy),
+                subtitle = stringResource(R.string.privacy_desc),
                 onClick = { showPrivacyDialog = true }
             )
             Divider(color = PurpleLight)
             SettingsItem(
-                title = "检查更新",
-                subtitle = "查看最新发布版本",
+                title = stringResource(R.string.check_update),
+                subtitle = stringResource(R.string.check_update_desc),
                 onClick = {
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(
                         "https://github.com/QianYuan1437/VideoRotator/releases"
@@ -429,7 +461,7 @@ fun SettingsScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "视频旋转助手 v1.0.0",
+                    stringResource(R.string.app_tagline, appVersion),
                     fontSize = 12.sp,
                     color = Color.Gray
                 )
@@ -458,23 +490,23 @@ fun SettingsScreen(
         }
         AlertDialog(
             onDismissRequest = { showVersionDialog = false },
-            title = { Text("应用版本", fontWeight = FontWeight.Bold, color = PurpleDark) },
+            title = { Text(stringResource(R.string.app_version), fontWeight = FontWeight.Bold, color = PurpleDark) },
             text = {
                 Column {
-                    InfoRow("应用名称", "VideoRotator")
-                    InfoRow("版本号", versionName)
-                    InfoRow("构建号", versionCode.toString())
-                    InfoRow("包名", context.packageName)
-                    InfoRow("目标 SDK", "34")
-                    InfoRow("最低 SDK", "24")
+                    InfoRow(stringResource(R.string.info_app_name), "VideoRotator")
+                    InfoRow(stringResource(R.string.info_version_name), versionName)
+                    InfoRow(stringResource(R.string.info_version_code), versionCode.toString())
+                    InfoRow(stringResource(R.string.info_package), context.packageName)
+                    InfoRow(stringResource(R.string.info_target_sdk), context.applicationInfo.targetSdkVersion.toString())
+                    InfoRow(stringResource(R.string.info_min_sdk), if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) context.applicationInfo.minSdkVersion.toString() else "24")
                 }
             },
             confirmButton = {
                 TextButton(onClick = { showVersionDialog = false }) {
-                    Text("确定", color = PurplePrimary)
+                    Text(stringResource(R.string.confirm), color = PurplePrimary)
                 }
             },
-            containerColor = White,
+            containerColor = CardSurface,
             shape = RoundedCornerShape(20.dp)
         )
     }
@@ -483,11 +515,11 @@ fun SettingsScreen(
     if (showLicensesDialog) {
         AlertDialog(
             onDismissRequest = { showLicensesDialog = false },
-            title = { Text("开源许可", fontWeight = FontWeight.Bold, color = PurpleDark) },
+            title = { Text(stringResource(R.string.licenses), fontWeight = FontWeight.Bold, color = PurpleDark) },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "本应用使用以下开源库，遵循各自许可证：",
+                        stringResource(R.string.licenses_intro),
                         fontSize = 13.sp,
                         color = PurpleDark,
                         modifier = Modifier.padding(bottom = 8.dp)
@@ -519,7 +551,7 @@ fun SettingsScreen(
                         note = "1.7.3"
                     )
                     Text(
-                        "完整许可文本可在项目仓库的 LICENSE / NOTICE 文件查看。",
+                        stringResource(R.string.licenses_footer),
                         fontSize = 12.sp,
                         color = Color.Gray,
                         modifier = Modifier.padding(top = 12.dp)
@@ -528,10 +560,10 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showLicensesDialog = false }) {
-                    Text("关闭", color = PurplePrimary)
+                    Text(stringResource(R.string.close), color = PurplePrimary)
                 }
             },
-            containerColor = White,
+            containerColor = CardSurface,
             shape = RoundedCornerShape(20.dp)
         )
     }
@@ -540,44 +572,44 @@ fun SettingsScreen(
     if (showPrivacyDialog) {
         AlertDialog(
             onDismissRequest = { showPrivacyDialog = false },
-            title = { Text("隐私政策", fontWeight = FontWeight.Bold, color = PurpleDark) },
+            title = { Text(stringResource(R.string.privacy), fontWeight = FontWeight.Bold, color = PurpleDark) },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "VideoRotator 重视您的隐私，承诺如下：",
+                        stringResource(R.string.privacy_intro),
                         fontSize = 14.sp,
                         color = PurpleDark,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.padding(bottom = 12.dp)
                     )
                     PrivacySection(
-                        title = "1. 本地处理",
-                        body = "所有视频旋转操作均在您的设备上完成，原始视频和转换结果不会上传到任何服务器。"
+                        title = stringResource(R.string.privacy_1_title),
+                        body = stringResource(R.string.privacy_1_body)
                     )
                     PrivacySection(
-                        title = "2. 不收集数据",
-                        body = "本应用不包含任何分析、统计或跟踪 SDK，不会上传您的使用数据。"
+                        title = stringResource(R.string.privacy_2_title),
+                        body = stringResource(R.string.privacy_2_body)
                     )
                     PrivacySection(
-                        title = "3. 文件访问权限",
-                        body = "应用仅通过 Android 媒体库或您主动选择的文件夹读取视频；Android 13 及以上使用 READ_MEDIA_VIDEO，更早版本使用 READ_EXTERNAL_STORAGE。系统文件夹选择器（SAF）选择目录时仅您主动授权的目录可被访问。"
+                        title = stringResource(R.string.privacy_3_title),
+                        body = stringResource(R.string.privacy_3_body)
                     )
                     PrivacySection(
-                        title = "4. 输出位置",
-                        body = "转换后的视频默认保存到应用私有目录（Android/data/com.videorotator/files）或您指定的文件夹。"
+                        title = stringResource(R.string.privacy_4_title),
+                        body = stringResource(R.string.privacy_4_body)
                     )
                     PrivacySection(
-                        title = "5. 开源",
-                        body = "本应用为开源项目，源代码可在 GitHub 仓库查看，便于您审查全部实现。"
+                        title = stringResource(R.string.privacy_5_title),
+                        body = stringResource(R.string.privacy_5_body)
                     )
                 }
             },
             confirmButton = {
                 TextButton(onClick = { showPrivacyDialog = false }) {
-                    Text("我知道了", color = PurplePrimary)
+                    Text(stringResource(R.string.got_it), color = PurplePrimary)
                 }
             },
-            containerColor = White,
+            containerColor = CardSurface,
             shape = RoundedCornerShape(20.dp)
         )
     }
@@ -592,7 +624,7 @@ private fun SettingsSection(
 ) {
     Card(
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = White),
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -745,12 +777,12 @@ private fun PrivacySection(title: String, body: String) {
 
 // ============== 语言切换 ==============
 
-private data class LanguageOption(val tag: String, val label: String)
+private data class LanguageOption(val tag: String, @StringRes val labelRes: Int)
 
 private val languageOptions = listOf(
-    LanguageOption("zh", "中文"),
-    LanguageOption("en", "English"),
-    LanguageOption("", "跟随系统")
+    LanguageOption("zh", R.string.language_zh),
+    LanguageOption("en", R.string.language_en),
+    LanguageOption("", R.string.language_system)
 )
 
 @Composable
@@ -771,7 +803,7 @@ private fun LanguageSelector(current: String, onSelect: (String) -> Unit) {
                 Surface(
                     onClick = { onSelect(opt.tag) },
                     shape = RoundedCornerShape(12.dp),
-                    color = if (selected) PurplePrimary else androidx.compose.ui.graphics.Color.White,
+                    color = if (selected) PurplePrimary else CardSurface,
                     modifier = Modifier.weight(1f)
                 ) {
                     Box(
@@ -779,31 +811,14 @@ private fun LanguageSelector(current: String, onSelect: (String) -> Unit) {
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            opt.label,
+                            stringResource(opt.labelRes),
                             fontSize = 14.sp,
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (selected) White else PurpleDark
+                            color = if (selected) OnPrimary else PurpleDark
                         )
                     }
                 }
             }
         }
     }
-}
-
-/**
- * 应用语言切换：写入 PlayerPrefs + 通过 AppCompatDelegate 设置应用级 locale，
- * Activity.recreate() 触发 Compose 重新加载字符串资源。
- */
-private fun applyLanguageAndRecreate(context: android.content.Context, tag: String) {
-    AppCompatDelegate.setApplicationLocales(
-        androidx.core.os.LocaleListCompat.forLanguageTags(
-            when (tag) {
-                "zh" -> "zh-CN"
-                "en" -> "en"
-                else -> ""  // 跟随系统
-            }
-        )
-    )
-    (context as? ComponentActivity)?.recreate()
 }
