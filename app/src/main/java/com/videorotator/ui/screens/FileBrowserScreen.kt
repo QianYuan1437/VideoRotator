@@ -1,5 +1,6 @@
 package com.videorotator.ui.screens
 
+import androidx.compose.material.icons.filled.DeleteSweep
 import com.videorotator.R
 import androidx.compose.ui.res.stringResource
 import android.net.Uri
@@ -72,7 +73,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.videorotator.ui.components.ConvertBadge
 import com.videorotator.ui.components.InfoChip
-import com.videorotator.ui.components.OrientationIndicator
+import com.videorotator.ui.components.OrientationBadge
+import com.videorotator.ui.components.ListJumpButtons
 import com.videorotator.ui.components.ScreenHorizontalPadding
 import com.videorotator.ui.components.ScreenTitle
 import com.videorotator.ui.components.ScreenTopPadding
@@ -115,6 +117,13 @@ fun FileBrowserScreen(
     onPickDirectory: () -> Unit,
     onRequestPermission: () -> Unit,
     onConsumeLastPlayedUri: () -> Unit = {},
+    /** 上次浏览（播放）的视频，悬浮「定位」按钮据此跳转 */
+    lastViewedUri: String? = null,
+    /** 删除单个已转换视频的原视频 */
+    onDeleteOriginal: (MarkedVideo) -> Unit = {},
+    /** 多选中可删除原视频的数量，及批量删除 */
+    selectedDeletableCount: Int = 0,
+    onDeleteOriginalsSelected: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -165,6 +174,8 @@ fun FileBrowserScreen(
                 onSelectAll = onSelectAll,
                 onDeselectAll = onDeselectAll,
                 onBatchConvert = onBatchConvert,
+                deletableCount = selectedDeletableCount,
+                onDeleteOriginals = onDeleteOriginalsSelected,
                 onExitSelectMode = onExitSelectMode
             )
         }
@@ -223,7 +234,8 @@ fun FileBrowserScreen(
                         state = listState,
                         contentPadding = PaddingValues(
                             start = ScreenHorizontalPadding, end = ScreenHorizontalPadding,
-                            top = 4.dp, bottom = 16.dp
+                            // 底部留出悬浮按钮的位置
+                            top = 4.dp, bottom = 88.dp
                         ),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxSize()
@@ -238,10 +250,20 @@ fun FileBrowserScreen(
                                     if (state.isSelectMode) onToggleSelect(video.uri) else onVideoClick(video)
                                 },
                                 onLongClick = { onVideoLongClick(video) },
-                                onToggleSelect = { onToggleSelect(video.uri) }
+                                onToggleSelect = { onToggleSelect(video.uri) },
+                                onDeleteOriginal = { onDeleteOriginal(item) }
                             )
                         }
                     }
+                    val lastViewedIndex = remember(items, lastViewedUri) {
+                        lastViewedUri?.let { uri -> items.indexOfFirst { it.video.uri.toString() == uri } }
+                    }
+                    ListJumpButtons(
+                        listState = listState,
+                        lastViewedIndex = lastViewedIndex,
+                        lastViewedKey = lastViewedUri,
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)
+                    )
                     // 列表已有内容时刷新，不再整页切成转圈，只在顶部显示细进度
                     if (state.isLoading) {
                         CircularProgressIndicator(
@@ -517,6 +539,8 @@ private fun SelectActionBar(
     onSelectAll: () -> Unit,
     onDeselectAll: () -> Unit,
     onBatchConvert: () -> Unit,
+    deletableCount: Int,
+    onDeleteOriginals: () -> Unit,
     onExitSelectMode: () -> Unit
 ) {
     Surface(
@@ -534,7 +558,10 @@ private fun SelectActionBar(
                 stringResource(R.string.selected_count, selectedCount, totalCount),
                 color = PurpleDark,
                 fontWeight = FontWeight.Medium,
-                fontSize = 13.sp
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val allSelected = totalCount > 0 && selectedCount >= totalCount
@@ -555,6 +582,12 @@ private fun SelectActionBar(
                         fontSize = 13.sp
                     )
                 }
+                // 选中项里有已转换的视频时：一键删除它们的原视频
+                if (deletableCount > 0) {
+                    IconButton(onClick = onDeleteOriginals) {
+                        Icon(Icons.Filled.DeleteSweep, stringResource(R.string.delete_original), tint = DeleteRed)
+                    }
+                }
                 TextButton(onClick = onExitSelectMode) {
                     Text(stringResource(R.string.exit), color = PurpleDark, fontSize = 13.sp)
                 }
@@ -571,7 +604,8 @@ private fun VideoCard(
     isSelected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
-    onToggleSelect: () -> Unit
+    onToggleSelect: () -> Unit,
+    onDeleteOriginal: () -> Unit
 ) {
     val video = item.video
     Card(
@@ -605,6 +639,7 @@ private fun VideoCard(
                     degrees = item.degrees,
                     modifier = Modifier.align(Alignment.TopStart)
                 )
+                OrientationBadge(video, Modifier.align(Alignment.BottomEnd))
             }
 
             Spacer(Modifier.width(12.dp))
@@ -622,8 +657,6 @@ private fun VideoCard(
                     InfoChip(video.durationText)
                     Spacer(Modifier.width(6.dp))
                     InfoChip(video.resolution)
-                    Spacer(Modifier.width(6.dp))
-                    OrientationIndicator(isLandscape = video.isLandscape)
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -641,10 +674,17 @@ private fun VideoCard(
                     onCheckedChange = { onToggleSelect() },
                     colors = CheckboxDefaults.colors(checkedColor = PurplePrimary, checkmarkColor = OnPrimary)
                 )
+            } else if (item.canDeleteOriginal) {
+                // 已转换：可删除原视频释放空间（产物是无损的，内容完全一致）
+                IconButton(onClick = onDeleteOriginal) {
+                    Icon(Icons.Filled.DeleteSweep, stringResource(R.string.delete_original), tint = DeleteRed.copy(alpha = 0.85f))
+                }
             }
         }
     }
 }
+
+private val DeleteRed = Color(0xFFD32F2F)
 
 @Composable
 private fun MessageState(

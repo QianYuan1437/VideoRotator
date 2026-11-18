@@ -2,6 +2,12 @@ package com.videorotator.ui.components
 
 import androidx.compose.material.icons.filled.HourglassTop
 import com.videorotator.R
+import com.videorotator.utils.VideoInfo
+import androidx.compose.material.icons.filled.CropSquare
+import androidx.compose.material.icons.filled.StayCurrentLandscape
+import androidx.compose.material.icons.filled.StayCurrentPortrait
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.annotation.StringRes
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -47,33 +53,53 @@ fun InfoChip(text: String) {
     }
 }
 
+private enum class Shape(val icon: ImageVector, @StringRes val label: Int) {
+    PORTRAIT(Icons.Filled.StayCurrentPortrait, R.string.orientation_portrait),
+    LANDSCAPE(Icons.Filled.StayCurrentLandscape, R.string.orientation_landscape),
+    SQUARE(Icons.Filled.CropSquare, R.string.orientation_square)
+}
+
+private fun shapeOf(video: VideoInfo) = when {
+    video.displayWidth > video.displayHeight -> Shape.LANDSCAPE
+    video.displayWidth < video.displayHeight -> Shape.PORTRAIT
+    else -> Shape.SQUARE
+}
+
 /**
- * 视频方向指示器：用一块长方形表示横竖屏方向。
- * - 横屏（landscape）→ 横长方形
- * - 竖屏（portrait）→ 竖长方形
- * 容器尺寸与 InfoChip 一致，视觉上与其他 chip 等高。
+ * 缩略图右下角的方向标识：手机图标（竖握 / 横握）+「竖屏 / 横屏」文字。
+ * 之前是 chip 里一块小长方形，含义不直观。
  */
 @Composable
-fun OrientationIndicator(isLandscape: Boolean) {
+fun OrientationBadge(video: VideoInfo, modifier: Modifier = Modifier) {
+    val shape = shapeOf(video)
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = if (isLandscape) PurplePrimary.copy(alpha = 0.2f) else PurpleLight
+        shape = RoundedCornerShape(topStart = 10.dp, bottomEnd = 12.dp),
+        color = Color.Black.copy(alpha = 0.62f),
+        modifier = modifier
     ) {
-        Box(
-            modifier = Modifier
-                .padding(horizontal = 8.dp, vertical = 2.dp)
-                .size(width = 18.dp, height = 14.dp),
-            contentAlignment = Alignment.Center
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(
-                        width = if (isLandscape) 18.dp else 8.dp,
-                        height = if (isLandscape) 8.dp else 14.dp
-                    )
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(PurpleDark)
-            )
+            Icon(shape.icon, null, tint = Color.White, modifier = Modifier.size(12.dp))
+            Spacer(Modifier.width(2.dp))
+            Text(stringResource(shape.label), fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+    }
+}
+
+/** 方向标签（与 InfoChip 同高）：用于转换页等信息行 */
+@Composable
+fun OrientationChip(video: VideoInfo) {
+    val shape = shapeOf(video)
+    Surface(shape = RoundedCornerShape(12.dp), color = PurpleLight) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(shape.icon, null, tint = PurplePrimary, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(3.dp))
+            Text(stringResource(shape.label), fontSize = 12.sp, color = PurpleDark, maxLines = 1, softWrap = false)
         }
     }
 }

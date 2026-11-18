@@ -11,7 +11,6 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import androidx.annotation.StringRes
 import com.videorotator.MainActivity
 import com.videorotator.R
 
@@ -25,9 +24,19 @@ object Notifier {
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
 
-    fun notifyResult(appContext: Context, id: String, @StringRes titleRes: Int, text: String) {
+    private const val RESULT_ID = 1002
+
+    /** 一批任务全部结束：单个任务显示文件名，多个显示成功 / 失败数量 */
+    fun notifyQueueDone(appContext: Context, succeeded: List<String>, failed: List<String>) {
         val context = AppLocale.localized(appContext)
-        val title = context.getString(titleRes)
+        val (title, text) = when {
+            succeeded.size == 1 && failed.isEmpty() -> context.getString(R.string.notif_done) to succeeded[0]
+            succeeded.isEmpty() && failed.size == 1 -> context.getString(R.string.notif_failed) to failed[0]
+            failed.isEmpty() -> context.getString(R.string.notif_done) to
+                context.getString(R.string.snack_done_many, succeeded.size)
+            else -> context.getString(R.string.notif_done) to
+                context.getString(R.string.snack_done_with_failed, succeeded.size, failed.size)
+        }
         // 应用在前台时用户能直接看到进度，不打扰
         if (MainActivity.isInForeground) return
         if (!AppPrefs.getNotifyOnComplete(context) || !canPost(context)) return
@@ -50,7 +59,7 @@ object Notifier {
             .setAutoCancel(true)
             .build()
         try {
-            nm.notify(id.hashCode(), notification)
+            nm.notify(RESULT_ID, notification)
         } catch (_: SecurityException) {}
     }
 }

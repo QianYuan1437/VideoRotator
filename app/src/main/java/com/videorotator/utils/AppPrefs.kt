@@ -19,6 +19,7 @@ object AppPrefs {
     private const val KEY_LIST_FILTER = "video_list_filter"
     private const val KEY_LIST_DEDUPE = "video_list_dedupe"
     private const val KEY_ASKED_PREFIX = "permission_asked_"
+    private const val KEY_LAST_VIEWED = "last_viewed_uri"
 
     private fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -73,6 +74,13 @@ object AppPrefs {
 
     fun setPermissionAsked(context: Context, permission: String) {
         prefs(context).edit().putBoolean(KEY_ASKED_PREFIX + permission, true).apply()
+    }
+
+    /** 上次浏览（播放）的视频，列表「定位」按钮跳转用 */
+    fun getLastViewedUri(context: Context): String? = prefs(context).getString(KEY_LAST_VIEWED, null)
+
+    fun setLastViewedUri(context: Context, uri: String?) {
+        prefs(context).edit().putString(KEY_LAST_VIEWED, uri).apply()
     }
 
     fun getListDedupe(context: Context): Boolean = prefs(context).getBoolean(KEY_LIST_DEDUPE, false)

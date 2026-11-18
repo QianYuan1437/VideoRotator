@@ -1,5 +1,10 @@
 package com.videorotator
 
+import com.videorotator.ui.components.evictThumbnail
+import com.videorotator.ui.components.formatSize
+import com.videorotator.ui.components.DeleteOriginalDialog
+import com.videorotator.viewmodel.ConvertEngine
+import androidx.activity.result.IntentSenderRequest
 import com.videorotator.utils.ConvertMark
 import com.videorotator.utils.Notifier
 import androidx.compose.ui.platform.LocalContext
@@ -275,11 +280,22 @@ fun MainScreen(
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     // 「转换列表」二级 Tab 提到这里保存：从播放页返回时不会被重置
     var convertListTab by rememberSaveable { mutableIntStateOf(CONVERT_TAB_PROGRESS) }
-    // 视频列表滚动位置：MainScreen 不随播放页切换销毁，返回列表时停在原处
+    // 各列表滚动位置：MainScreen 不随播放页切换销毁，返回列表时停在原处
     val videoListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val progressListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val convertedListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val context = LocalContext.current
+
+    // 上次浏览（播放）的视频：各列表的悬浮「定位」按钮据此跳转，重启应用后仍有效
+    var lastViewedUri by rememberSaveable { mutableStateOf(AppPrefs.getLastViewedUri(context)) }
 
     // 全屏子页面状态：列表点击 -> 播放器 -> 转换页
     var playingVideo by remember { mutableStateOf<VideoInfo?>(null) }
+    fun play(video: VideoInfo) {
+        playingVideo = video
+        lastViewedUri = video.uri.toString()
+        AppPrefs.setLastViewedUri(context, lastViewedUri)
+    }
     var convertingVideo by remember { mutableStateOf<VideoInfo?>(null) }
     val playerViewModel: PlayerViewModel = viewModel()
     val convertViewModel: ConvertViewModel = viewModel()
@@ -287,7 +303,6 @@ fun MainScreen(
     val activeJobs by convertViewModel.activeCount.collectAsState()
     val fbState by fbViewModel.state.collectAsState()
     val jobsSelectMode by convertViewModel.isSelectMode.collectAsState()
-    val context = LocalContext.current
 
     // 队列跑完时在应用内提示结果（应用在后台时由通知提示），可直接播放 / 重试 / 查看
     val snackbarHostState = remember { SnackbarHostState() }
@@ -315,7 +330,7 @@ fun MainScreen(
             when {
                 ok.size == 1 && failed.isEmpty() -> convertViewModel.outputInfo(ok[0])?.let {
                     convertingVideo = null
-                    playingVideo = it
+                    play(it)
                 }
                 ok.isEmpty() && failed.size == 1 -> convertViewModel.retryJob(failed[0].id)
                 else -> {
@@ -325,6 +340,31 @@ fun MainScreen(
                     selectedTab = 1
                 }
             }
+        }
+    }
+
+    // 删除原视频：不属于本应用的文件需要用户在系统对话框中确认
+    val deleteConsentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result -> convertViewModel.onDeleteConsentResult(result.resultCode == android.app.Activity.RESULT_OK) }
+    val deleteConsent by convertViewModel.deleteConsent.collectAsState()
+    LaunchedEffect(deleteConsent) {
+        deleteConsent?.let { sender ->
+            if (convertViewModel.engine.claimDeleteConsent(sender)) {
+                deleteConsentLauncher.launch(IntentSenderRequest.Builder(sender).build())
+            }
+        }
+    }
+    LaunchedEffect(convertViewModel) {
+        convertViewModel.originalsDeleted.collect { r ->
+            val message = when {
+                r.count == 0 -> context.getString(R.string.originals_none_deleted)
+                r.skipped > 0 -> context.getString(
+                    R.string.originals_deleted_skipped, r.count, formatSize(r.freedBytes), r.skipped
+                )
+                else -> context.getString(R.string.originals_deleted, r.count, formatSize(r.freedBytes))
+            }
+            snackbarHostState.showSnackbar(message, withDismissAction = true)
         }
     }
 
@@ -360,13 +400,6 @@ fun MainScreen(
         !fbState.isSelectMode && !jobsSelectMode
     ) {
         selectedTab = 0
-    }
-    // 还有任务在转换时，首页按返回只退到后台：Android 11 及以下返回会销毁 Activity，
-    // 连带取消排队中的任务
-    BackHandler(enabled = playing == null && converting == null && selectedTab == 0 &&
-        !fbState.isSelectMode && !jobsSelectMode && activeJobs > 0
-    ) {
-        (context as? android.app.Activity)?.moveTaskToBack(true)
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -474,18 +507,22 @@ fun MainScreen(
                             onVideoClick = { video ->
                                 // 记住该视频所在的目录（路径栏点击可跳回）
                                 fbViewModel.rememberPlayedVideo(video)
-                                playingVideo = video
+                                play(video)
                             },
                             onBatchStarted = {
                                 convertListTab = CONVERT_TAB_PROGRESS
                                 selectedTab = 1
-                            }
+                            },
+                            lastViewedUri = lastViewedUri
                         )
                         1 -> ConvertListScreen(
                             viewModel = convertViewModel,
                             currentTab = convertListTab,
                             onTabSelected = { convertListTab = it },
-                            onPlay = { playingVideo = it }
+                            onPlay = { play(it) },
+                            progressListState = progressListState,
+                            convertedListState = convertedListState,
+                            lastViewedUri = lastViewedUri
                         )
                         2 -> ConvertConfigScreen(
                             outputTreeUri = outputTreeUri,
@@ -520,11 +557,12 @@ fun FileBrowserTab(
     onPickDirectory: () -> Unit,
     onRequestPermission: () -> Unit,
     onVideoClick: (VideoInfo) -> Unit,
-    onBatchStarted: () -> Unit
+    onBatchStarted: () -> Unit,
+    lastViewedUri: String?
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val state by fbViewModel.state.collectAsState()
-    val successJobs by convertViewModel.successJobs.collectAsState()
+    val links by convertViewModel.links.collectAsState()
     val activeSourceUris by convertViewModel.activeSourceUris.collectAsState()
     // 产物增删后刷新列表，让新产物出现并打上标识、已删除的文件消失
     val outputRevision by convertViewModel.outputRevision.collectAsState()
@@ -532,11 +570,11 @@ fun FileBrowserTab(
 
     // 标识 / 去重 / 筛选分步记忆：标识只在列表或任务结果变化时计算一次，切换筛选只做过滤；
     // 任务流只在成功产物 / 队列内容变化时发射，转换进度不会触发重算
-    val marked = remember(state.videos, successJobs, activeSourceUris) {
-        VideoMarks.mark(state.videos, successJobs, activeSourceUris)
+    val marked = remember(state.videos, links, activeSourceUris) {
+        VideoMarks.mark(state.videos, links, activeSourceUris)
     }
     // 筛选数量与去重开关保持一致
-    val all = remember(marked, successJobs, state.dedupe) { VideoMarks.dedupe(marked, successJobs, state.dedupe) }
+    val all = remember(marked, state.dedupe) { VideoMarks.dedupe(marked, state.dedupe) }
     val visible = remember(all, state.filter) { VideoMarks.filter(all, state.filter) }
     val counts = remember(all) {
         val converted = all.count { with(VideoMarks) { it.mark.isConverted } }
@@ -547,6 +585,28 @@ fun FileBrowserTab(
         )
     }
     val autoScan = remember { AppPrefs.getAutoScan(context) }
+
+    // 删除原视频（单个 / 多选批量），确认后交给转换引擎
+    var pendingDeleteOriginals by remember { mutableStateOf<List<ConvertEngine.DeleteCandidate>?>(null) }
+    fun candidatesOf(items: List<com.videorotator.utils.MarkedVideo>) = items
+        .filter { it.canDeleteOriginal }
+        .map { ConvertEngine.DeleteCandidate(it.original!!, it.outputs) }
+        .distinctBy { it.original.uri }
+    val selectedDeletable = remember(all, state.selectedUris) {
+        candidatesOf(all.filter { it.video.uri.toString() in state.selectedUris })
+    }
+    pendingDeleteOriginals?.let { candidates ->
+        DeleteOriginalDialog(
+            candidates = candidates,
+            onConfirm = {
+                candidates.forEach { evictThumbnail(it.original.uri) }
+                convertViewModel.deleteOriginals(candidates)
+                fbViewModel.exitSelectMode()
+                pendingDeleteOriginals = null
+            },
+            onDismiss = { pendingDeleteOriginals = null }
+        )
+    }
 
     FileBrowserScreen(
         state = state,
@@ -594,6 +654,10 @@ fun FileBrowserTab(
         onJumpToLastPlayed = { fbViewModel.jumpToLastPlayedParent() },
         onPickDirectory = onPickDirectory,
         onRequestPermission = onRequestPermission,
-        onConsumeLastPlayedUri = { fbViewModel.consumeLastPlayedUri() }
+        onConsumeLastPlayedUri = { fbViewModel.consumeLastPlayedUri() },
+        lastViewedUri = lastViewedUri,
+        onDeleteOriginal = { item -> pendingDeleteOriginals = candidatesOf(listOf(item)) },
+        selectedDeletableCount = selectedDeletable.size,
+        onDeleteOriginalsSelected = { pendingDeleteOriginals = selectedDeletable }
     )
 }

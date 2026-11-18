@@ -99,7 +99,7 @@
     <string name="no_converted">还没有已转换的视频</string>
     <string name="no_converted_desc">转换完成的视频会出现在这里（包括保存到 Movies / DCIM / 自定义路径的）</string>
     <string name="delete_file_title">删除视频文件</string>
-    <string name="delete_file_msg">将从设备中删除「%1$s」，此操作无法撤销。原视频不受影响。</string>
+    <string name="delete_file_msg">将从设备中删除「%1$s」，此操作无法撤销。</string>
     <string name="reverse_title">反向旋转</string>
     <string name="reverse_msg">当前是%1$s，将用原视频改为%2$s重新转换，完成后替换这个文件。</string>
     <string name="reverse_msg_file">将把这个视频再旋转 180°（得到相反方向），完成后替换这个文件。</string>
@@ -228,4 +228,17 @@
     <string name="view">查看</string>
     <string name="perm_open_settings">视频读取权限已被拒绝，请在系统设置中开启</string>
     <string name="delete_both_msg">将删除任务记录和视频文件「%1$s」，此操作无法撤销。原视频不受影响。</string>
+    <string name="orientation_portrait">竖屏</string>
+    <string name="orientation_landscape">横屏</string>
+    <string name="orientation_square">方形</string>
+    <string name="back_to_top">回到顶部</string>
+    <string name="jump_last_viewed">定位到上次浏览</string>
+    <string name="delete_original">删除原视频</string>
+    <string name="delete_original_msg_one">将删除原视频「%1$s」，释放 %2$s。转换后的视频保留，其画面、声音与原视频一致（只改变了方向）；字幕等其他轨道不会保留。</string>
+    <string name="delete_original_msg_many">将删除 %1$d 个已转换视频的原视频，释放 %2$s。转换后的视频保留，其画面、声音与原视频一致（只改变了方向）；字幕等其他轨道不会保留。</string>
+    <string name="delete_original_private_warn">注意：部分转换结果保存在应用私有目录，卸载应用时会被一并删除。如需长期保留，请改存到 Movies / DCIM 等公共目录。</string>
+    <string name="originals_deleted">已删除 %1$d 个原视频，释放 %2$s</string>
+    <string name="originals_deleted_skipped">已删除 %1$d 个原视频，释放 %2$s；%3$d 个未删除</string>
+    <string name="originals_none_deleted">未删除原视频（转换结果已不存在，或未获授权）</string>
+    <string name="delete_file_only_copy">原视频已删除，这是该视频仅存的副本，删除后将无法找回。</string>
 </resources>

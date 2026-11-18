@@ -98,7 +98,7 @@
     <string name="no_converted">No converted videos yet</string>
     <string name="no_converted_desc">Converted videos appear here, including those saved to Movies / DCIM / custom folders</string>
     <string name="delete_file_title">Delete video file</string>
-    <string name="delete_file_msg">\"%1$s\" will be deleted from this device. This can\'t be undone. The original video is not affected.</string>
+    <string name="delete_file_msg">\"%1$s\" will be deleted from this device. This can\'t be undone.</string>
     <string name="reverse_title">Reverse rotation</string>
     <string name="reverse_msg">Currently %1$s. The original video will be converted again as %2$s and replace this file.</string>
     <string name="reverse_msg_file">This video will be rotated another 180° (the opposite direction) and replace this file.</string>
@@ -227,4 +227,17 @@
     <string name="view">View</string>
     <string name="perm_open_settings">Video access was denied. Please allow it in system settings.</string>
     <string name="delete_both_msg">The record and the file \"%1$s\" will be deleted. This can\'t be undone. The original video is not affected.</string>
+    <string name="orientation_portrait">Portrait</string>
+    <string name="orientation_landscape">Landscape</string>
+    <string name="orientation_square">Square</string>
+    <string name="back_to_top">Back to top</string>
+    <string name="jump_last_viewed">Jump to last viewed</string>
+    <string name="delete_original">Delete original</string>
+    <string name="delete_original_msg_one">The original video \"%1$s\" will be deleted, freeing %2$s. The converted video is kept; its picture and sound are identical to the original (only the orientation changed). Subtitle and other extra tracks are not kept.</string>
+    <string name="delete_original_msg_many">The originals of %1$d converted videos will be deleted, freeing %2$s. The converted videos are kept; their picture and sound are identical (only the orientation changed). Subtitle and other extra tracks are not kept.</string>
+    <string name="delete_original_private_warn">Note: some converted videos are in the app\'s private folder and will be deleted if the app is uninstalled. Save to a public folder such as Movies or DCIM to keep them long-term.</string>
+    <string name="originals_deleted">Deleted %1$d originals, freed %2$s</string>
+    <string name="originals_deleted_skipped">Deleted %1$d originals, freed %2$s; %3$d not deleted</string>
+    <string name="originals_none_deleted">No originals deleted (the converted copy is missing, or access was denied)</string>
+    <string name="delete_file_only_copy">The original has been deleted. This is the only remaining copy of the video and cannot be recovered once deleted.</string>
 </resources>

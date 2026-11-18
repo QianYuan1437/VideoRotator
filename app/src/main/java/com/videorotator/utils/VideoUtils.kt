@@ -82,7 +82,7 @@ object VideoUtils {
     private val videoExtensions = setOf("mp4", "mkv", "avi", "mov", "webm", "flv", "ts", "m4v", "3gp")
 
     /** 转换产物命名：<原名>_rotated_<度数>deg.mp4 */
-    private val ROTATED_NAME = Regex("""^(.*)_rotated_(\d+)deg\.mp4$""", RegexOption.IGNORE_CASE)
+    private val ROTATED_NAME = Regex("""^(.*)_rotated_(\d+)deg(?: \(\d+\))?\.mp4$""", RegexOption.IGNORE_CASE)
 
     fun outputNameFor(baseName: String, degrees: Int) = "${baseName}_rotated_${degrees}deg.mp4"
 
@@ -163,6 +163,28 @@ object VideoUtils {
         return videos
     }
 
+    private val ISO6709 = Regex("""([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)""")
+
+    /** 一次解析读出旋转角（needRotation 时）与拍摄地点（ISO 6709，如 +37.4219-122.0840/） */
+    private fun readRotationAndLocation(context: Context, uri: Uri, needRotation: Boolean): Pair<Int, Pair<Float, Float>?> {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val rotation = if (needRotation) {
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            } else 0
+            val location = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)
+                ?.let { ISO6709.find(it) }
+                ?.let { m -> m.groupValues[1].toFloatOrNull()?.let { lat -> m.groupValues[2].toFloatOrNull()?.let { lat to it } } }
+                ?.takeIf { (lat, lon) -> lat in -90f..90f && lon in -180f..180f }
+            rotation to location
+        } catch (_: Exception) {
+            0 to null
+        } finally {
+            retriever.release()
+        }
+    }
+
     fun getRotation(context: Context, uri: Uri): Int {
         val retriever = MediaMetadataRetriever()
         return try {
@@ -198,6 +220,12 @@ object VideoUtils {
         outputTreeUri: Uri? = null,
         checkCancelled: () -> Unit = {},
         onOutputCreated: (Uri) -> Unit = {},
+        /**
+         * 目标位置已有同名文件时，是否可以替换它（只允许替换同一原视频的旧产物）。
+         * 不可替换时新产物另起名「xxx (1).mp4」—— 两个不同视频恰好同名时，
+         * 不能互相覆盖（之前后转的会删掉先转的产物，若其原视频已删除就彻底丢失）。
+         */
+        canReplace: (uri: Uri, path: String?) -> Boolean = { _, _ -> false },
         onProgress: (Float) -> Unit = {}
     ): Result<RotateOutput> {
         val inputName = queryDisplayName(context, input.uri) ?: input.displayName
@@ -207,7 +235,7 @@ object VideoUtils {
             val net = ((m.groupValues[2].toIntOrNull() ?: 0) + degrees) % 360
             outputNameFor(m.groupValues[1], net)
         } ?: outputNameFor(inputName.substringBeforeLast('.').ifBlank { "video" }, degrees)
-        val io = RotateIo(checkCancelled, onOutputCreated, onProgress)
+        val io = RotateIo(checkCancelled, onOutputCreated, canReplace, onProgress, queryDateTaken(context, input.uri))
         return try {
             when {
                 outputTreeUri != null ->
@@ -233,8 +261,21 @@ object VideoUtils {
     private class RotateIo(
         val checkCancelled: () -> Unit,
         val onOutputCreated: (Uri) -> Unit,
-        val onProgress: (Float) -> Unit
+        val canReplace: (Uri, String?) -> Boolean,
+        val onProgress: (Float) -> Unit,
+        /** 原视频的拍摄时间（毫秒）：写入产物，相册里按时间排序时与原视频在一起 */
+        val dateTaken: Long?
     )
+
+    /** a.mp4 → a (1).mp4 */
+    private fun numberedName(name: String, n: Int): String =
+        "${name.substringBeforeLast('.')} ($n).${name.substringAfterLast('.', "mp4")}"
+
+    private fun queryDateTaken(context: Context, uri: Uri): Long? = try {
+        if (uri.authority != MediaStore.AUTHORITY) null
+        else context.contentResolver.query(uri, arrayOf(MediaStore.Video.VideoColumns.DATE_TAKEN), null, null, null)
+            ?.use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0).takeIf { it > 0 } else null }
+    } catch (_: Exception) { null }
 
     private const val PART_SUFFIX = ".part"
     private const val LEGACY_TMP_NAME = "rotate_tmp.mp4"
@@ -260,15 +301,21 @@ object VideoUtils {
         if (!targetDir.exists() && !targetDir.mkdirs()) {
             return Result.failure(ConvertError(JobErrors.NO_OUTPUT_DIR))
         }
-        val outputFile = File(targetDir, outputName)
-        val partFile = File(targetDir, outputName + PART_SUFFIX)
-        partFile.delete()
+        // 临时文件名每个任务唯一：两个任务并行写同名产物时互不干扰
+        val partFile = File(targetDir, "$outputName.${System.nanoTime()}$PART_SUFFIX")
         io.onOutputCreated(Uri.fromFile(partFile))
         var ok = false
+        var outputFile = File(targetDir, outputName)
         try {
             doRotate(context, inputUri, null, partFile.absolutePath, degrees, io)
-            if (outputFile.exists()) outputFile.delete()
-            ok = partFile.renameTo(outputFile)
+            synchronized(this) {
+                if (outputFile.exists() && io.canReplace(Uri.fromFile(outputFile), outputFile.absolutePath)) {
+                    outputFile.delete()
+                }
+                var n = 1
+                while (outputFile.exists()) outputFile = File(targetDir, numberedName(outputName, n++))
+                ok = partFile.renameTo(outputFile)
+            }
         } finally {
             if (!ok) partFile.delete()
         }
@@ -302,8 +349,9 @@ object VideoUtils {
         }
         val relativePath = target.publicDir + "/"
 
-        // 本应用之前生成的同名文件：新文件写成功后再删除（同名时 MediaStore 会先给新文件自动改名）
-        val oldUris = try {
+        // 同一原视频之前生成的同名产物：新文件写成功后再删除（同名时 MediaStore 会先给新文件自动改名）；
+        // 其他视频的同名产物保留，新文件沿用自动改名
+        val sameName = try {
             resolver.query(
                 collection, arrayOf(MediaStore.MediaColumns._ID),
                 "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=?",
@@ -312,12 +360,17 @@ object VideoUtils {
                 buildList { while (c.moveToNext()) add(Uri.withAppendedPath(collection, c.getLong(0).toString())) }
             } ?: emptyList()
         } catch (_: Exception) { emptyList() }
+        val oldUris = sameName.filter { uri ->
+            val playUri = Uri.withAppendedPath(videoCollection(), android.content.ContentUris.parseId(uri).toString())
+            io.canReplace(playUri, queryDataPath(context, uri))
+        }
 
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, outputName)
             put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
             put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
+            if (!isDownload) io.dateTaken?.let { put(MediaStore.Video.VideoColumns.DATE_TAKEN, it) }
         }
         val outUri = resolver.insert(collection, values)
             ?: return Result.failure(ConvertError(JobErrors.CREATE_FILE))
@@ -328,7 +381,7 @@ object VideoUtils {
                 doRotate(context, inputUri, pfd.fileDescriptor, null, degrees, io)
             } ?: return Result.failure(ConvertError(JobErrors.OPEN_OUTPUT))
             oldUris.forEach { runCatching { resolver.delete(it, null, null) } }
-            if (oldUris.isNotEmpty()) {
+            if (oldUris.isNotEmpty() && oldUris.size == sameName.size) {
                 // 旧文件删除后改回正式文件名；失败时保留系统给的自动改名
                 runCatching {
                     resolver.update(outUri, ContentValues().apply {
@@ -372,7 +425,9 @@ object VideoUtils {
             ?: return Result.failure(ConvertError(JobErrors.CREATE_FILE))
         io.onOutputCreated(outputDoc.uri)
         fun replaceOld() {
-            if (oldDoc != null && oldDoc.uri != outputDoc.uri && oldDoc.delete()) {
+            if (oldDoc != null && oldDoc.uri != outputDoc.uri &&
+                io.canReplace(oldDoc.uri, treeDocumentPath(oldDoc.uri)) && oldDoc.delete()
+            ) {
                 runCatching { outputDoc.renameTo(outputName) }
             }
         }
@@ -464,8 +519,11 @@ object VideoUtils {
             }
             if (trackIndexMap.isEmpty()) throw ConvertError(JobErrors.NO_TRACKS)
 
-            val baseRotation = sourceRotation ?: getRotation(context, inputUri)
+            val (metaRotation, location) = readRotationAndLocation(context, inputUri, needRotation = sourceRotation == null)
+            val baseRotation = sourceRotation ?: metaRotation
             muxer.setOrientationHint(((baseRotation + degrees) % 360 + 360) % 360)
+            // 保留拍摄地点（MediaMuxer 只复制音视频轨，其余元数据需单独写回）
+            location?.let { (lat, lon) -> runCatching { muxer.setLocation(lat, lon) } }
             muxer.start()
             muxerStarted = true
             onProgress(0.02f)

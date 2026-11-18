@@ -60,7 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.videorotator.ui.components.InfoChip
-import com.videorotator.ui.components.OrientationIndicator
+import com.videorotator.ui.components.OrientationChip
 import com.videorotator.ui.components.VideoThumbnail
 import com.videorotator.ui.theme.CardSurface
 import com.videorotator.ui.theme.OnPrimary
@@ -174,7 +174,7 @@ fun ConvertScreen(
                             Spacer(Modifier.width(6.dp))
                             InfoChip(videoInfo.resolution)
                             Spacer(Modifier.width(6.dp))
-                            OrientationIndicator(isLandscape = videoInfo.isLandscape)
+                            OrientationChip(videoInfo)
                         }
                     }
                 }

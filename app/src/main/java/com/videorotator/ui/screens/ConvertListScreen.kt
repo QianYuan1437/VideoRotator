@@ -1,5 +1,9 @@
 package com.videorotator.ui.screens
 
+import com.videorotator.utils.toFileRef
+import com.videorotator.viewmodel.ConvertEngine
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import com.videorotator.utils.JobErrors
 import com.videorotator.R
 import androidx.compose.ui.res.stringResource
@@ -73,7 +77,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.videorotator.ui.components.ConvertBadge
 import com.videorotator.ui.components.InfoChip
-import com.videorotator.ui.components.OrientationIndicator
+import com.videorotator.ui.components.OrientationBadge
+import com.videorotator.ui.components.ListJumpButtons
+import com.videorotator.ui.components.DeleteOriginalDialog
 import com.videorotator.ui.components.ScreenHorizontalPadding
 import com.videorotator.ui.components.ScreenTitle
 import com.videorotator.ui.components.ScreenTopPadding
@@ -106,6 +112,11 @@ fun ConvertListScreen(
     currentTab: Int,
     onTabSelected: (Int) -> Unit,
     onPlay: (VideoInfo) -> Unit,
+    /** 两个子列表的滚动位置由 MainScreen 持有：切换页面后回来仍停在原处 */
+    progressListState: LazyListState = rememberLazyListState(),
+    convertedListState: LazyListState = rememberLazyListState(),
+    /** 上次浏览（播放）的视频 uri，悬浮「定位」按钮据此跳转 */
+    lastViewedUri: String? = null,
     modifier: Modifier = Modifier
 ) {
     val jobs by viewModel.jobs.collectAsState()
@@ -170,13 +181,17 @@ fun ConvertListScreen(
                 selectedIds = selectedIds,
                 isSelectMode = isSelectMode,
                 viewModel = viewModel,
-                onPlay = onPlay
+                onPlay = onPlay,
+                listState = progressListState,
+                lastViewedUri = lastViewedUri
             )
             else -> ConvertedVideosTab(
                 items = remember(converted, sortKey) { sortConverted(converted, sortKey) },
                 loading = convertedLoading,
                 viewModel = viewModel,
-                onPlay = onPlay
+                onPlay = onPlay,
+                listState = convertedListState,
+                lastViewedUri = lastViewedUri
             )
         }
     }
@@ -308,7 +323,9 @@ private fun ProgressTab(
     selectedIds: Set<String>,
     isSelectMode: Boolean,
     viewModel: ConvertViewModel,
-    onPlay: (VideoInfo) -> Unit
+    onPlay: (VideoInfo) -> Unit,
+    listState: LazyListState,
+    lastViewedUri: String?
 ) {
     var menuJob by remember { mutableStateOf<ConvertJob?>(null) }
     // 删除视频文件前确认（first = 任务，second = 是否同时删除记录）
@@ -333,10 +350,11 @@ private fun ProgressTab(
                 title = stringResource(R.string.no_jobs),
                 subtitle = stringResource(R.string.no_jobs_desc)
             )
-        } else {
+        } else Box(Modifier.fillMaxSize()) {
             LazyColumn(
+                state = listState,
                 contentPadding = PaddingValues(
-                    start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, top = 8.dp, bottom = 16.dp
+                    start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, top = 8.dp, bottom = 88.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
@@ -361,6 +379,17 @@ private fun ProgressTab(
                     )
                 }
             }
+            val lastViewedIndex = remember(jobs, lastViewedUri) {
+                lastViewedUri?.let { uri ->
+                    jobs.indexOfFirst { it.outputUri?.toString() == uri || it.videoInfo.uri.toString() == uri }
+                }
+            }
+            ListJumpButtons(
+                listState = listState,
+                lastViewedIndex = lastViewedIndex,
+                lastViewedKey = lastViewedUri,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)
+            )
         }
     }
 
@@ -742,10 +771,13 @@ private fun ConvertedVideosTab(
     items: List<ConvertedVideo>,
     loading: Boolean,
     viewModel: ConvertViewModel,
-    onPlay: (VideoInfo) -> Unit
+    onPlay: (VideoInfo) -> Unit,
+    listState: LazyListState,
+    lastViewedUri: String?
 ) {
     var pendingDelete by remember { mutableStateOf<ConvertedVideo?>(null) }
     var pendingReverse by remember { mutableStateOf<ConvertedVideo?>(null) }
+    var pendingDeleteOriginal by remember { mutableStateOf<ConvertedVideo?>(null) }
 
     when {
         items.isEmpty() && loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -756,28 +788,62 @@ private fun ConvertedVideosTab(
             title = stringResource(R.string.no_converted),
             subtitle = stringResource(R.string.no_converted_desc)
         )
-        else -> LazyColumn(
-            contentPadding = PaddingValues(
-                start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, top = 8.dp, bottom = 16.dp
-            ),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(items, key = { it.video.uri.toString() }) { item ->
-                ConvertedVideoCard(
-                    item = item,
-                    onPlay = { onPlay(item.video) },
-                    onDelete = { pendingDelete = item },
-                    onReverse = { pendingReverse = item }
-                )
+        else -> Box(Modifier.fillMaxSize()) {
+            LazyColumn(
+                state = listState,
+                contentPadding = PaddingValues(
+                    start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, top = 8.dp, bottom = 88.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(items, key = { it.video.uri.toString() }) { item ->
+                    ConvertedVideoCard(
+                        item = item,
+                        onPlay = { onPlay(item.video) },
+                        onDelete = { pendingDelete = item },
+                        onReverse = { pendingReverse = item },
+                        onDeleteOriginal = { pendingDeleteOriginal = item }
+                    )
+                }
             }
+            val lastViewedIndex = remember(items, lastViewedUri) {
+                lastViewedUri?.let { uri -> items.indexOfFirst { it.video.uri.toString() == uri } }
+            }
+            ListJumpButtons(
+                listState = listState,
+                lastViewedIndex = lastViewedIndex,
+                lastViewedKey = lastViewedUri,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)
+            )
+        }
+    }
+
+    pendingDeleteOriginal?.let { item ->
+        val candidate = item.original?.let { ConvertEngine.DeleteCandidate(it, listOf(item.video.toFileRef())) }
+        if (candidate == null) {
+            pendingDeleteOriginal = null
+        } else {
+            DeleteOriginalDialog(
+                candidates = listOf(candidate),
+                onConfirm = {
+                    evictThumbnail(candidate.original.uri)
+                    viewModel.deleteOriginals(listOf(candidate))
+                    pendingDeleteOriginal = null
+                },
+                onDismiss = { pendingDeleteOriginal = null }
+            )
         }
     }
 
     pendingDelete?.let { item ->
+        // 原视频已删除（对应关系还在、原视频却不在了）：这是仅存的副本，加重提示
+        val onlyCopy = item.original == null &&
+            viewModel.engine.outputLinks.linkOf(item.video.uri, item.video.path) != null
         ConfirmDialog(
             title = stringResource(R.string.delete_file_title),
-            message = stringResource(R.string.delete_file_msg, item.video.displayName),
+            message = stringResource(R.string.delete_file_msg, item.video.displayName) +
+                if (onlyCopy) "\n\n" + stringResource(R.string.delete_file_only_copy) else "",
             confirmText = stringResource(R.string.delete),
             danger = true,
             onConfirm = {
@@ -813,7 +879,8 @@ private fun ConvertedVideoCard(
     item: ConvertedVideo,
     onPlay: () -> Unit,
     onDelete: () -> Unit,
-    onReverse: () -> Unit
+    onReverse: () -> Unit,
+    onDeleteOriginal: () -> Unit
 ) {
     val video = item.video
     Card(
@@ -842,6 +909,7 @@ private fun ConvertedVideoCard(
                     degrees = item.job?.degrees,
                     modifier = Modifier.align(Alignment.TopStart)
                 )
+                OrientationBadge(video, Modifier.align(Alignment.BottomEnd))
             }
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -857,8 +925,6 @@ private fun ConvertedVideoCard(
                     InfoChip(video.durationText)
                     Spacer(Modifier.width(6.dp))
                     InfoChip(video.resolution)
-                    Spacer(Modifier.width(6.dp))
-                    OrientationIndicator(isLandscape = video.isLandscape)
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -871,21 +937,31 @@ private fun ConvertedVideoCard(
             }
         }
         Divider(color = PurpleLight, thickness = 1.dp)
-        // 底部操作区：删除文件 | 反向旋转
+        // 底部操作区：删除文件 | 反向旋转 | 删除原视频（原视频仍在设备上时）
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            CardAction(Icons.Filled.Delete, stringResource(R.string.delete_file), ErrorRed, onDelete, Modifier.weight(1f))
-            Box(
-                modifier = Modifier
-                    .width(1.dp)
-                    .height(24.dp)
-                    .background(PurpleLight)
-            )
-            CardAction(Icons.Filled.Rotate90DegreesCcw, stringResource(R.string.reverse_title), PurpleDark, onReverse, Modifier.weight(1f))
+            val stacked = item.original != null
+            CardAction(Icons.Filled.Delete, stringResource(R.string.delete_file), ErrorRed, onDelete, Modifier.weight(1f), stacked)
+            ActionDivider()
+            CardAction(Icons.Filled.Rotate90DegreesCcw, stringResource(R.string.reverse_title), PurpleDark, onReverse, Modifier.weight(1f), stacked)
+            if (stacked) {
+                ActionDivider()
+                CardAction(Icons.Filled.DeleteSweep, stringResource(R.string.delete_original), ErrorRed, onDeleteOriginal, Modifier.weight(1f), true)
+            }
         }
     }
+}
+
+@Composable
+private fun ActionDivider() {
+    Box(
+        modifier = Modifier
+            .width(1.dp)
+            .height(24.dp)
+            .background(PurpleLight)
+    )
 }
 
 @Composable
@@ -894,8 +970,23 @@ private fun CardAction(
     label: String,
     color: Color,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 三个操作并排时改为图标在上、文字在下，英文等较长文案也放得下 */
+    stacked: Boolean = false
 ) {
+    if (stacked) {
+        Column(
+            modifier = modifier
+                .clickable(onClick = onClick)
+                .padding(vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(icon, null, tint = color, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.height(2.dp))
+            Text(label, fontSize = 11.sp, color = color, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        return
+    }
     Row(
         modifier = modifier
             .clickable(onClick = onClick)
@@ -904,8 +995,8 @@ private fun CardAction(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(icon, null, tint = color, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(label, fontSize = 13.sp, color = color, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.width(4.dp))
+        Text(label, fontSize = 13.sp, color = color, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
