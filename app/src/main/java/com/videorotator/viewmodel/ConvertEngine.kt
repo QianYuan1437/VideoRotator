@@ -1,5 +1,7 @@
 package com.videorotator.viewmodel
 
+import com.videorotator.utils.PermissionUtils
+import kotlinx.coroutines.ensureActive
 import android.provider.MediaStore
 import android.os.Build
 import android.content.IntentSender
@@ -77,8 +79,8 @@ data class ConvertedVideo(
     val original: FileRef? = null
 )
 
-/** 删除原视频的结果 */
-data class OriginalsDeleted(val count: Int, val freedBytes: Long, val skipped: Int)
+/** 批量删除的结果 */
+data class FilesDeleted(val kind: ConvertEngine.DeleteKind, val count: Int, val freedBytes: Long, val skipped: Int)
 
 /**
  * 转换引擎：进程级单例，任务队列、产物列表都在这里。
@@ -547,16 +549,18 @@ class ConvertEngine private constructor(private val app: Context) {
      * 汇总「已转视频」：成功任务的输出（任意保存位置）+ 私有目录中扫描到的产物，
      * 过滤掉已被删除的文件。之前只扫描私有目录，保存到 Movies / DCIM / 自定义路径的产物都看不到。
      */
-    // ---- 删除原视频（释放空间） ----
+    // ---- 删除原视频 / 产物（释放空间） ----
 
     /** 一个可删除的原视频，及它已转换出的产物（删除前确认至少一个产物仍在） */
     data class DeleteCandidate(val original: FileRef, val outputs: List<FileRef>)
 
+    enum class DeleteKind { ORIGINALS, OUTPUTS }
+
     private class PendingConsent(val refs: List<FileRef>, val sender: IntentSender, val retryAfterGrant: Boolean)
 
     private val consentQueue = ArrayDeque<PendingConsent>()
-    private var deletedCount = 0
-    private var deletedBytes = 0L
+    private var deleteKind = DeleteKind.ORIGINALS
+    private val deletedRefs = mutableListOf<FileRef>()
     private var deleteSkipped = 0
     private var deleting = false
 
@@ -572,40 +576,56 @@ class ConvertEngine private constructor(private val app: Context) {
         return true
     }
 
-    private val _originalsDeleted = MutableSharedFlow<OriginalsDeleted>(extraBufferCapacity = 4)
-    val originalsDeleted: SharedFlow<OriginalsDeleted> = _originalsDeleted.asSharedFlow()
+    private val _filesDeleted = MutableSharedFlow<FilesDeleted>(extraBufferCapacity = 4)
+    val filesDeleted: SharedFlow<FilesDeleted> = _filesDeleted.asSharedFlow()
 
     /**
      * 删除已转换视频的原视频。只删除「至少有一个产物仍在设备上」的原视频，避免误删唯一的副本。
-     * 不属于本应用的媒体文件，Android 10+ 需要用户在系统对话框中确认。
      */
     fun deleteOriginals(candidates: List<DeleteCandidate>) {
         if (deleting || candidates.isEmpty()) return
         deleting = true
-        deletedCount = 0
-        deletedBytes = 0L
-        deleteSkipped = 0
+        scope.launch {
+            val (safe, unsafe) = withContext(Dispatchers.IO) {
+                candidates.distinctBy { it.original.uri }.partition { c ->
+                    val o = c.original
+                    c.outputs.any { out ->
+                        out.uri != o.uri && out.path != o.path && VideoUtils.outputExists(context, out.uri, out.path)
+                    } && VideoUtils.outputExists(context, o.uri, o.path)
+                }
+            }
+            deleting = false
+            startDelete(DeleteKind.ORIGINALS, safe.map { it.original }, unsafe.size)
+        }
+    }
+
+    /** 批量删除「已转视频」中的产物文件（之前版本 / 重装前生成的文件同样需要系统确认） */
+    fun deleteOutputs(items: List<ConvertedVideo>) {
+        if (deleting || items.isEmpty()) return
+        val refs = items.map { FileRef(it.video.uri, it.video.path, it.video.displayName, it.video.size) }
+        refs.forEach { evictThumbnailCache(it.uri) }
+        startDelete(DeleteKind.OUTPUTS, refs.distinctBy { it.uri }, 0)
+    }
+
+    private fun startDelete(kind: DeleteKind, refs: List<FileRef>, skippedBefore: Int) {
+        if (deleting) return
+        deleting = true
+        deleteKind = kind
+        deletedRefs.clear()
+        deleteSkipped = skippedBefore
         scope.launch {
             val needConsent = mutableListOf<FileRef>()
             withContext(Dispatchers.IO) {
-                candidates.distinctBy { it.original.uri }.forEach { c ->
-                    val o = c.original
-                    val safe = c.outputs.any { out ->
-                        out.uri != o.uri && out.path != o.path && VideoUtils.outputExists(context, out.uri, out.path)
-                    }
-                    if (!safe || !VideoUtils.outputExists(context, o.uri, o.path)) {
-                        deleteSkipped++
-                        return@forEach
-                    }
+                refs.forEach { ref ->
                     try {
-                        if (deleteFile(o)) countDeleted(o) else deleteSkipped++
+                        if (deleteFile(ref)) synchronized(deletedRefs) { deletedRefs.add(ref) } else deleteSkipped++
                     } catch (e: SecurityException) {
                         val recoverable = if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) e as? RecoverableSecurityException else null
                         when {
                             recoverable != null ->
-                                consentQueue.add(PendingConsent(listOf(o), recoverable.userAction.actionIntent.intentSender, true))
-                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && o.uri.authority == MediaStore.AUTHORITY ->
-                                needConsent.add(o)
+                                consentQueue.add(PendingConsent(listOf(ref), recoverable.userAction.actionIntent.intentSender, true))
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && ref.uri.authority == MediaStore.AUTHORITY ->
+                                needConsent.add(ref)
                             else -> deleteSkipped++
                         }
                     }
@@ -633,19 +653,11 @@ class ConvertEngine private constructor(private val app: Context) {
                         // Android 11+ 由系统完成删除
                         else -> !VideoUtils.outputExists(context, ref.uri, ref.path)
                     }
-                    if (gone) countDeleted(ref) else deleteSkipped++
+                    if (gone) synchronized(deletedRefs) { deletedRefs.add(ref) } else deleteSkipped++
                 }
             }
             nextConsentOrFinish()
         }
-    }
-
-    private val deletedSources = mutableSetOf<String>()
-
-    private fun countDeleted(ref: FileRef) {
-        deletedCount++
-        deletedBytes += ref.size
-        synchronized(deletedSources) { deletedSources.add(ref.uri.toString()) }
     }
 
     private fun nextConsentOrFinish() {
@@ -655,12 +667,29 @@ class ConvertEngine private constructor(private val app: Context) {
             return
         }
         deleting = false
-        outputLinks.markSourcesMissing(synchronized(deletedSources) { deletedSources.toSet().also { deletedSources.clear() } })
-        _originalsDeleted.tryEmit(OriginalsDeleted(deletedCount, deletedBytes, deleteSkipped))
-        if (deletedCount > 0) onOutputsDeleted()
+        val deleted = synchronized(deletedRefs) { deletedRefs.toList().also { deletedRefs.clear() } }
+        when (deleteKind) {
+            DeleteKind.ORIGINALS -> outputLinks.markSourcesMissing(deleted.map { it.uri.toString() }.toSet())
+            DeleteKind.OUTPUTS -> deleted.forEach { ref ->
+                outputLinks.removeOutput(ref.uri, ref.path)
+                _jobs.update { list ->
+                    list.map { j ->
+                        if (j.hasOutput && (j.outputUri == ref.uri || (ref.path != null && j.outputPath == ref.path))) {
+                            j.copy(outputPath = null, outputUri = null, state = JobState.FAILED, error = JobErrors.FILE_DELETED)
+                        } else j
+                    }
+                }
+            }
+        }
+        if (deleteKind == DeleteKind.OUTPUTS) {
+            val gone = deleted.map { it.uri }.toSet()
+            _converted.update { list -> list.filter { it.video.uri !in gone } }
+        }
+        _filesDeleted.tryEmit(FilesDeleted(deleteKind, deleted.size, deleted.sumOf { it.size }, deleteSkipped))
+        if (deleted.isNotEmpty()) onOutputsDeleted()
     }
 
-    /** 删除一个原视频文件；无权限时抛出 SecurityException（交由系统确认） */
+    /** 删除一个文件；无权限时抛出 SecurityException（交由系统确认） */
     private fun deleteFile(ref: FileRef): Boolean {
         val uri = ref.uri
         return when {
@@ -673,27 +702,81 @@ class ConvertEngine private constructor(private val app: Context) {
         }
     }
 
+    private fun evictThumbnailCache(uri: Uri) = com.videorotator.ui.components.evictThumbnail(uri)
+
     private var refreshJob: Job? = null
+
+    /** 本次运行中已确认找不到原视频的旧产物，避免每次刷新重复查询 */
+    private val orphanOutputs = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /**
+     * 给没有对应记录的产物找回原视频并补建对应关系（需在 IO 线程调用）：
+     * 文件名 <原名>_rotated_<角度>deg.mp4 → 媒体库中名为 <原名>.* 、时长一致的视频。
+     * 有多个候选（同名拷贝）时取同目录的，否则取第一个。
+     */
+    private fun adoptLegacyOutputs(outputs: List<VideoInfo>) {
+        outputs.forEach { out ->
+            val key = out.uri.toString()
+            if (key in orphanOutputs || outputLinks.linkOf(out.uri, out.path) != null) return@forEach
+            val base = VideoUtils.sourceBaseNameOf(out.displayName) ?: return@forEach
+            val candidates = runCatching { VideoUtils.findVideosByBaseName(context, base) }.getOrDefault(emptyList())
+                .filter { c ->
+                    c.uri != out.uri && VideoUtils.sourceBaseNameOf(c.displayName) == null &&
+                        c.duration > 0 && out.duration > 0 && kotlin.math.abs(c.duration - out.duration) <= 1500
+                }
+            val outDir = out.path?.substringBeforeLast('/')
+            val src = candidates.firstOrNull { it.path?.substringBeforeLast('/') == outDir } ?: candidates.firstOrNull()
+            if (src == null) {
+                orphanOutputs.add(key)
+                return@forEach
+            }
+            val degrees = Regex("""_rotated_(\d+)deg""").find(out.displayName)?.groupValues?.get(1)?.toIntOrNull() ?: 90
+            outputLinks.put(
+                SourceLink(
+                    outputUri = key,
+                    outputPath = out.path,
+                    source = FileRef(src.uri, src.path, src.displayName, src.size),
+                    sourceDuration = src.duration,
+                    degrees = degrees,
+                    createdAt = out.dateAdded * 1000,
+                    target = inferTarget(out.path).name
+                )
+            )
+        }
+    }
 
     fun refreshConverted() {
         // 新的刷新取代进行中的旧刷新，避免旧结果后到覆盖新列表
         refreshJob?.cancel()
         refreshJob = scope.launch {
+            // 合并短时间内的多次刷新（批量转换时每完成一个都会触发）
+            kotlinx.coroutines.delay(250)
             _convertedLoading.value = true
             val jobsSnapshot = _jobs.value
+            // 产物已在应用外被删除的成功任务：标记为「输出文件已删除」，不再显示为已完成
+            val missingJobs = mutableListOf<String>()
+            val canCheck = PermissionUtils.hasPermissions(context)
             val list = withContext(Dispatchers.IO) {
                 val result = mutableListOf<ConvertedVideo>()
                 val seenPaths = mutableSetOf<String>()
                 val seenUris = mutableSetOf<String>()
                 jobsSnapshot.filter { it.hasOutput }.forEach { job ->
-                    if (!VideoUtils.outputExists(context, job.outputUri, job.outputPath)) return@forEach
+                    ensureActive()  // 被新的刷新取代时尽早停止
+                    if (!VideoUtils.outputExists(context, job.outputUri, job.outputPath)) {
+                        if (canCheck) missingJobs.add(job.id)
+                        return@forEach
+                    }
                     val info = outputInfo(job) ?: return@forEach
                     val uri = info.uri
                     result.add(ConvertedVideo(info, job))
                     job.outputPath?.let { seenPaths.add(it) }
                     seenUris.add(uri.toString())
                 }
-                VideoUtils.scanConvertedDir(context).forEach { v ->
+                val privateFiles = VideoUtils.scanConvertedDir(context)
+                // 之前版本（或重装前）转换的产物：没有任何记录，按命名规则从媒体库找出来，并对应回原视频
+                val legacy = runCatching { VideoUtils.scanRotatedOutputs(context) }.getOrDefault(emptyList())
+                adoptLegacyOutputs(privateFiles + legacy)
+                privateFiles.forEach { v ->
                     if (v.path !in seenPaths && v.uri.toString() !in seenUris) {
                         result.add(ConvertedVideo(v, null))
                         v.path?.let { seenPaths.add(it) }
@@ -703,15 +786,34 @@ class ConvertEngine private constructor(private val app: Context) {
                 // 清理产物已被外部删除的对应关系，视频列表的「已转换」标识随之更新
                 outputLinks.prune(context)
                 // 任务记录已清空、但对应关系还在的产物（保存在 Movies / DCIM / 自定义路径的）
+                val legacyByUri = legacy.associateBy { it.uri.toString() }
                 outputLinks.links.value.forEach { link ->
+                    ensureActive()
                     if (link.outputUri in seenUris || (link.outputPath != null && link.outputPath in seenPaths)) return@forEach
+                    // 媒体库里已查到的直接用，不再逐个解析文件
+                    legacyByUri[link.outputUri]?.let { v ->
+                        result.add(ConvertedVideo(v, null))
+                        seenUris.add(link.outputUri)
+                        v.path?.let { seenPaths.add(it) }
+                        return@forEach
+                    }
                     val out = link.output
                     if (!VideoUtils.outputExists(context, out.uri, out.path)) return@forEach
                     val file = out.path?.let { java.io.File(it) }?.takeIf { it.exists() }
                     VideoUtils.readVideoInfo(
                         context, out.uri, out.name, file?.length() ?: link.source.size,
                         (file?.lastModified() ?: link.createdAt) / 1000, out.path
-                    )?.let { result.add(ConvertedVideo(it, null)) }
+                    )?.let {
+                        result.add(ConvertedVideo(it, null))
+                        seenUris.add(out.uri.toString())
+                        out.path?.let { p -> seenPaths.add(p) }
+                    }
+                }
+                // 找不到原视频的旧产物也列出来，便于统一管理
+                legacy.forEach { v ->
+                    if (v.uri.toString() !in seenUris && (v.path == null || v.path !in seenPaths)) {
+                        result.add(ConvertedVideo(v, null))
+                    }
                 }
                 // 关联仍在设备上的原视频（可删除以释放空间）
                 result.map { item ->
@@ -721,6 +823,16 @@ class ConvertEngine private constructor(private val app: Context) {
                         it.uri != item.video.uri && VideoUtils.outputExists(context, it.uri, it.path)
                     }
                     item.copy(original = alive)
+                }
+            }
+            if (missingJobs.isNotEmpty()) {
+                val ids = missingJobs.toSet()
+                _jobs.update { all ->
+                    all.map {
+                        if (it.id in ids && it.hasOutput) {
+                            it.copy(outputPath = null, outputUri = null, state = JobState.FAILED, error = JobErrors.FILE_DELETED)
+                        } else it
+                    }
                 }
             }
             // 内容不变时不发射，列表不重组；视频列表的重扫由真正的文件增删（outputRevision）触发

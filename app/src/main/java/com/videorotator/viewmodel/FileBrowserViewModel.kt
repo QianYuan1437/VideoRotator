@@ -37,6 +37,12 @@ enum class VideoFilter(@StringRes val labelRes: Int) {
     CONVERTED(R.string.filter_converted)
 }
 
+/** 已转换部分的细分筛选：只看已转换过的源文件 / 只看转换产物 */
+enum class ConvertedKind(@StringRes val labelRes: Int) {
+    SOURCES(R.string.kind_sources),
+    OUTPUTS(R.string.kind_outputs)
+}
+
 data class FileBrowserState(
     val videos: List<VideoInfo> = emptyList(),
     val isLoading: Boolean = false,
@@ -48,6 +54,7 @@ data class FileBrowserState(
     val sortKey: SortKey = SortKey.DATE_DESC,
     val filter: VideoFilter = VideoFilter.ALL,
     val dedupe: Boolean = false,
+    val kind: ConvertedKind? = null,
     val isSelectMode: Boolean = false,
     val selectedUris: Set<String> = emptySet(),
     val lastPlayedParent: String? = null,
@@ -156,8 +163,27 @@ class FileBrowserViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun setFilter(filter: VideoFilter) {
-        _state.update { it.copy(filter = filter, selectedUris = emptySet()) }
+        // 「未转换」与源文件 / 产物细分互斥
+        _state.update {
+            it.copy(
+                filter = filter,
+                kind = if (filter == VideoFilter.UNCONVERTED) null else it.kind,
+                selectedUris = emptySet()
+            )
+        }
         AppPrefs.setListFilter(getApplication(), filter.name)
+    }
+
+    /** 再点一次已选中的细分即取消 */
+    fun setKind(kind: ConvertedKind?) {
+        _state.update {
+            val next = if (it.kind == kind) null else kind
+            it.copy(
+                kind = next,
+                filter = if (next != null && it.filter == VideoFilter.UNCONVERTED) VideoFilter.ALL else it.filter,
+                selectedUris = emptySet()
+            )
+        }
     }
 
     fun setDedupe(enabled: Boolean) {

@@ -1,5 +1,10 @@
 package com.videorotator.ui.screens
 
+import androidx.compose.material.icons.filled.Rotate90DegreesCw
+import com.videorotator.ui.components.formatSize
+import com.videorotator.ui.components.FreeSpaceBanner
+import com.videorotator.ui.components.FilterPill
+import com.videorotator.viewmodel.ConvertedKind
 import androidx.compose.material.icons.filled.DeleteSweep
 import com.videorotator.R
 import androidx.compose.ui.res.stringResource
@@ -124,6 +129,13 @@ fun FileBrowserScreen(
     /** 多选中可删除原视频的数量，及批量删除 */
     selectedDeletableCount: Int = 0,
     onDeleteOriginalsSelected: () -> Unit = {},
+    /** 多选中未转换（可加入转换）的数量 */
+    selectedConvertibleCount: Int = 0,
+    kindCounts: Map<ConvertedKind, Int> = emptyMap(),
+    onKindSelected: (ConvertedKind) -> Unit = {},
+    /** 「源文件」筛选下可删除的原视频数量与总大小：显示一键删除提示条 */
+    deletableSummary: Pair<Int, Long>? = null,
+    onDeleteAllShown: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -163,9 +175,20 @@ fun FileBrowserScreen(
             filter = state.filter,
             counts = filterCounts,
             dedupe = state.dedupe,
+            kind = state.kind,
+            kindCounts = kindCounts,
             onFilterSelected = onFilterSelected,
-            onDedupeChanged = onDedupeChanged
+            onDedupeChanged = onDedupeChanged,
+            onKindSelected = onKindSelected
         )
+        if (deletableSummary != null && deletableSummary.first > 0 && !state.isSelectMode) {
+            FreeSpaceBanner(
+                text = stringResource(R.string.banner_sources, deletableSummary.first, formatSize(deletableSummary.second)),
+                actionText = stringResource(R.string.delete_all),
+                onAction = onDeleteAllShown,
+                modifier = Modifier.padding(start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, bottom = 8.dp)
+            )
+        }
 
         if (state.isSelectMode) {
             SelectActionBar(
@@ -173,8 +196,9 @@ fun FileBrowserScreen(
                 totalCount = items.size,
                 onSelectAll = onSelectAll,
                 onDeselectAll = onDeselectAll,
-                onBatchConvert = onBatchConvert,
+                convertibleCount = selectedConvertibleCount,
                 deletableCount = selectedDeletableCount,
+                onBatchConvert = onBatchConvert,
                 onDeleteOriginals = onDeleteOriginalsSelected,
                 onExitSelectMode = onExitSelectMode
             )
@@ -454,15 +478,19 @@ private fun QuickDirChip(
 }
 
 /**
- * 筛选栏：全部 / 未转换 / 已转换（带数量）+ 去重开关。
+ * 筛选栏：全部 / 未转换 / 已转换（带数量）+ 去重 + 已转换细分（源文件 / 转换产物）。
+ * 「源文件」直接列出已转换完毕、可删除的原视频，配合全选即可批量释放空间。
  */
 @Composable
 private fun FilterBar(
     filter: VideoFilter,
     counts: Map<VideoFilter, Int>,
     dedupe: Boolean,
+    kind: ConvertedKind?,
+    kindCounts: Map<ConvertedKind, Int>,
     onFilterSelected: (VideoFilter) -> Unit,
-    onDedupeChanged: (Boolean) -> Unit
+    onDedupeChanged: (Boolean) -> Unit,
+    onKindSelected: (ConvertedKind) -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -473,73 +501,59 @@ private fun FilterBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         VideoFilter.values().forEach { f ->
-            SelectChip(
+            FilterPill(
                 text = stringResource(f.labelRes) + (counts[f]?.let { " $it" } ?: ""),
                 selected = f == filter,
                 onClick = { onFilterSelected(f) }
             )
         }
-        Spacer(Modifier.width(4.dp))
-        Box(
-            modifier = Modifier
-                .width(1.dp)
-                .height(20.dp)
-                .background(PurpleDark.copy(alpha = 0.2f))
-        )
-        Spacer(Modifier.width(4.dp))
-        SelectChip(
+        FilterDivider()
+        FilterPill(
             text = stringResource(R.string.filter_dedupe),
             selected = dedupe,
             icon = Icons.Filled.ContentCopy,
             onClick = { onDedupeChanged(!dedupe) }
         )
+        FilterDivider()
+        FilterPill(
+            text = stringResource(R.string.kind_sources) + " ${kindCounts[ConvertedKind.SOURCES] ?: 0}",
+            selected = kind == ConvertedKind.SOURCES,
+            icon = Icons.Filled.Movie,
+            onClick = { onKindSelected(ConvertedKind.SOURCES) }
+        )
+        FilterPill(
+            text = stringResource(R.string.kind_outputs) + " ${kindCounts[ConvertedKind.OUTPUTS] ?: 0}",
+            selected = kind == ConvertedKind.OUTPUTS,
+            icon = Icons.Filled.Rotate90DegreesCw,
+            onClick = { onKindSelected(ConvertedKind.OUTPUTS) }
+        )
     }
 }
 
 @Composable
-private fun SelectChip(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    icon: androidx.compose.ui.graphics.vector.ImageVector? = null
-) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
-        color = if (selected) PurplePrimary else CardSurface,
-        border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, PurplePrimary.copy(alpha = 0.35f))
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (selected || icon != null) {
-                Icon(
-                    if (selected) Icons.Filled.Check else icon!!,
-                    null,
-                    tint = if (selected) OnPrimary else PurpleDark,
-                    modifier = Modifier.size(14.dp)
-                )
-                Spacer(Modifier.width(4.dp))
-            }
-            Text(
-                text,
-                fontSize = 13.sp,
-                color = if (selected) OnPrimary else PurpleDark,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
-            )
-        }
-    }
+private fun FilterDivider() {
+    Box(
+        modifier = Modifier
+            .padding(horizontal = 4.dp)
+            .width(1.dp)
+            .height(20.dp)
+            .background(PurpleDark.copy(alpha = 0.2f))
+    )
 }
 
+/**
+ * 多选操作栏（两行）：第一行已选数量 / 全选 / 退出，第二行是带文字的操作按钮 ——
+ * 「转换」只在选中了未转换的视频时出现，「删除原视频」只在选中了已转换的视频时出现。
+ */
 @Composable
 private fun SelectActionBar(
     selectedCount: Int,
     totalCount: Int,
+    convertibleCount: Int,
+    deletableCount: Int,
     onSelectAll: () -> Unit,
     onDeselectAll: () -> Unit,
     onBatchConvert: () -> Unit,
-    deletableCount: Int,
     onDeleteOriginals: () -> Unit,
     onExitSelectMode: () -> Unit
 ) {
@@ -547,49 +561,56 @@ private fun SelectActionBar(
         color = PurplePrimary.copy(alpha = 0.10f),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                stringResource(R.string.selected_count, selectedCount, totalCount),
-                color = PurpleDark,
-                fontWeight = FontWeight.Medium,
-                fontSize = 13.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.selected_count, selectedCount, totalCount),
+                    color = PurpleDark,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
                 val allSelected = totalCount > 0 && selectedCount >= totalCount
                 TextButton(onClick = { if (allSelected) onDeselectAll() else onSelectAll() }) {
                     Text(stringResource(if (allSelected) R.string.deselect_all else R.string.select_all), color = PurplePrimary, fontSize = 13.sp)
                 }
-                Button(
-                    onClick = onBatchConvert,
-                    enabled = selectedCount > 0,
-                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
-                    shape = RoundedCornerShape(16.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        stringResource(R.string.batch_convert, selectedCount),
-                        color = if (selectedCount > 0) OnPrimary else Color.Gray,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 13.sp
-                    )
-                }
-                // 选中项里有已转换的视频时：一键删除它们的原视频
-                if (deletableCount > 0) {
-                    IconButton(onClick = onDeleteOriginals) {
-                        Icon(Icons.Filled.DeleteSweep, stringResource(R.string.delete_original), tint = DeleteRed)
-                    }
-                }
                 TextButton(onClick = onExitSelectMode) {
                     Text(stringResource(R.string.exit), color = PurpleDark, fontSize = 13.sp)
+                }
+            }
+            if (convertibleCount > 0 || deletableCount > 0) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(bottom = 6.dp)
+                ) {
+                    if (convertibleCount > 0) {
+                        Button(
+                            onClick = onBatchConvert,
+                            colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                            shape = RoundedCornerShape(16.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.Rotate90DegreesCw, null, tint = OnPrimary, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(stringResource(R.string.batch_convert, convertibleCount), color = OnPrimary, fontSize = 13.sp, maxLines = 1)
+                        }
+                    }
+                    if (deletableCount > 0) {
+                        Button(
+                            onClick = onDeleteOriginals,
+                            colors = ButtonDefaults.buttonColors(containerColor = DeleteRed),
+                            shape = RoundedCornerShape(16.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.DeleteSweep, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(stringResource(R.string.delete_originals_n, deletableCount), color = Color.White, fontSize = 13.sp, maxLines = 1)
+                        }
+                    }
                 }
             }
         }

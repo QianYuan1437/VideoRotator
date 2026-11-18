@@ -89,6 +89,9 @@ object VideoUtils {
     /** 若文件名是转换产物，返回其原视频的不带扩展名的名字 */
     fun sourceBaseNameOf(outputName: String): String? = ROTATED_NAME.find(outputName)?.groupValues?.get(1)
 
+    /** 产物文件名里的旋转角度（相对原视频的净角度） */
+    fun degreesInName(outputName: String): Int? = ROTATED_NAME.find(outputName)?.groupValues?.get(2)?.toIntOrNull()
+
     private fun videoCollection(): Uri =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
@@ -102,6 +105,26 @@ object VideoUtils {
      * —— 之前每个视频都要解析一次文件头，视频一多扫描就要好几秒。
      */
     fun scanVideos(context: Context, directory: String? = null): List<VideoInfo> {
+        val dir = directory?.trimEnd('/')
+        return queryVideos(
+            context,
+            if (dir != null) "${MediaStore.Video.Media.DATA} LIKE ?" else null,
+            if (dir != null) arrayOf("$dir/%") else null
+        )
+    }
+
+    /** 设备上所有按本应用命名规则生成的转换产物（包括之前版本 / 重装前转换的） */
+    fun scanRotatedOutputs(context: Context): List<VideoInfo> =
+        queryVideos(context, "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?", arrayOf("%rotated%deg%"))
+            .filter { sourceBaseNameOf(it.displayName) != null }
+
+    /** 按文件名（不含扩展名）查找视频，用于给旧产物找回原视频 */
+    fun findVideosByBaseName(context: Context, baseName: String): List<VideoInfo> =
+        // LIKE 里 _ 和 % 是通配符：先宽松查询，再精确比对文件名
+        queryVideos(context, "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?", arrayOf("$baseName.%"))
+            .filter { it.displayName.substringBeforeLast('.').equals(baseName, ignoreCase = true) }
+
+    private fun queryVideos(context: Context, selection: String?, selectionArgs: Array<String>?): List<VideoInfo> {
         val videos = mutableListOf<VideoInfo>()
         val collection = videoCollection()
         // Android 11 起的媒体扫描器才会为视频填 ORIENTATION；更早的版本按「未知」处理，
@@ -120,10 +143,6 @@ object VideoUtils {
         ).apply {
             if (hasOrientation) add(MediaStore.Video.Media.ORIENTATION)
         }.toTypedArray()
-
-        val dir = directory?.trimEnd('/')
-        val selection = if (dir != null) "${MediaStore.Video.Media.DATA} LIKE ?" else null
-        val selectionArgs = if (dir != null) arrayOf("$dir/%") else null
 
         context.contentResolver.query(
             collection, projection, selection, selectionArgs,

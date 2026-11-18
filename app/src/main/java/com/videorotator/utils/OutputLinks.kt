@@ -77,6 +77,8 @@ class OutputLinks(context: Context) {
      * 只改动检查出的项：检查期间新加入的记录不受影响。
      */
     fun prune(context: Context) {
+        // 没有读取权限时无法判断别的应用 / 重装前创建的文件是否还在，不能据此删除记录
+        if (!PermissionUtils.hasPermissions(context)) return
         val snapshot = _links.value
         val dead = snapshot
             .filterNot { VideoUtils.outputExists(context, Uri.parse(it.outputUri), it.outputPath) }

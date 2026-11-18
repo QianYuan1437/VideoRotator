@@ -1,5 +1,21 @@
 package com.videorotator.ui.screens
 
+import com.videorotator.ui.components.OnFilterEmptied
+import com.videorotator.utils.VideoUtils
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.BorderStroke
+import com.videorotator.ui.components.formatSize
+import com.videorotator.ui.components.DeleteOutputsDialog
+import com.videorotator.ui.components.FreeSpaceBanner
+import com.videorotator.ui.components.Bullet
+import com.videorotator.ui.components.BulletDialog
+import com.videorotator.ui.components.FilterPill
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.annotation.StringRes
 import com.videorotator.utils.toFileRef
 import com.videorotator.viewmodel.ConvertEngine
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -106,6 +122,34 @@ const val CONVERT_TAB_CONVERTED = 2
 
 private val ErrorRed = Color(0xFFD32F2F)
 
+/** 「转换进度」筛选 */
+private enum class JobFilter(@StringRes val labelRes: Int) {
+    ALL(R.string.filter_all),
+    ACTIVE(R.string.jobs_active),
+    DONE(R.string.jobs_done),
+    FAILED(R.string.jobs_failed);
+
+    fun matches(job: ConvertJob) = when (this) {
+        ALL -> true
+        ACTIVE -> job.isActive
+        DONE -> job.state == JobState.SUCCESS
+        FAILED -> job.state == JobState.FAILED || job.state == JobState.CANCELLED
+    }
+}
+
+/** 「已转视频」筛选：原视频是否还在（还在的可删除以释放空间） */
+private enum class SourceFilter(@StringRes val labelRes: Int) {
+    ALL(R.string.filter_all),
+    HAS_SOURCE(R.string.src_present),
+    SOURCE_GONE(R.string.src_gone);
+
+    fun matches(item: ConvertedVideo) = when (this) {
+        ALL -> true
+        HAS_SOURCE -> item.original != null
+        SOURCE_GONE -> item.original == null
+    }
+}
+
 @Composable
 fun ConvertListScreen(
     viewModel: ConvertViewModel,
@@ -126,8 +170,11 @@ fun ConvertListScreen(
     val convertedLoading by viewModel.convertedLoading.collectAsState()
 
     // 「已转视频」排序（之前是占位代码，选了也不生效）
-    var sortKey by remember { mutableStateOf(SortKey.DATE_DESC) }
+    var sortKey by rememberSaveable { mutableStateOf(SortKey.DATE_DESC) }
+    var jobFilter by rememberSaveable { mutableStateOf(JobFilter.ALL) }
+    var sourceFilter by rememberSaveable { mutableStateOf(SourceFilter.ALL) }
     var confirmClear by remember { mutableStateOf(false) }
+    val convertedSelectMode by viewModel.convertedSelectMode.collectAsState()
 
     // 进入页面及成功产物变化时刷新「已转视频」（产物流只在成功任务变化时发射，进度不触发）
     val successJobs by viewModel.successJobs.collectAsState()
@@ -162,6 +209,17 @@ fun ConvertListScreen(
                         Icon(Icons.Filled.Refresh, stringResource(R.string.refresh), tint = PurpleDark)
                     }
                     ConvertedSortButton(sortKey = sortKey, onSelected = { sortKey = it })
+                    if (converted.isNotEmpty()) {
+                        IconButton(onClick = {
+                            if (convertedSelectMode) viewModel.exitConvertedSelectMode() else viewModel.enterConvertedSelectMode()
+                        }) {
+                            Icon(
+                                if (convertedSelectMode) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
+                                stringResource(R.string.multi_select),
+                                tint = if (convertedSelectMode) PurplePrimary else PurpleDark
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -172,12 +230,31 @@ fun ConvertListScreen(
             onTabSelected = {
                 onTabSelected(it)
                 viewModel.exitSelectMode()
+                viewModel.exitConvertedSelectMode()
             }
         )
 
         when (currentTab) {
-            CONVERT_TAB_PROGRESS -> ProgressTab(
-                jobs = remember(jobs) { jobs.sortedByDescending { it.createdAt } },
+            CONVERT_TAB_PROGRESS -> {
+                val sorted = remember(jobs) { jobs.sortedByDescending { it.createdAt } }
+                val jobCounts = remember(jobs) { JobFilter.values().associateWith { f -> jobs.count { f.matches(it) } } }
+                OnFilterEmptied(jobFilter, jobCounts[jobFilter] ?: 0) {
+                    if (jobFilter != JobFilter.ALL) jobFilter = JobFilter.ALL
+                }
+                PillRow {
+                    JobFilter.values().forEach { f ->
+                        FilterPill(
+                            text = stringResource(f.labelRes) + " ${jobCounts[f] ?: 0}",
+                            selected = f == jobFilter,
+                            onClick = {
+                                jobFilter = f
+                                viewModel.deselectAllJobs()
+                            }
+                        )
+                    }
+                }
+                ProgressTab(
+                jobs = remember(sorted, jobFilter) { sorted.filter { jobFilter.matches(it) } },
                 selectedIds = selectedIds,
                 isSelectMode = isSelectMode,
                 viewModel = viewModel,
@@ -185,8 +262,17 @@ fun ConvertListScreen(
                 listState = progressListState,
                 lastViewedUri = lastViewedUri
             )
+            }
             else -> ConvertedVideosTab(
-                items = remember(converted, sortKey) { sortConverted(converted, sortKey) },
+                items = remember(converted, sortKey, sourceFilter) {
+                    sortConverted(converted.filter { sourceFilter.matches(it) }, sortKey)
+                },
+                allItems = converted,
+                sourceFilter = sourceFilter,
+                onSourceFilter = {
+                    sourceFilter = it
+                    viewModel.setSelectedConverted(emptySet())
+                },
                 loading = convertedLoading,
                 viewModel = viewModel,
                 onPlay = onPlay,
@@ -197,9 +283,12 @@ fun ConvertListScreen(
     }
 
     if (confirmClear) {
-        ConfirmDialog(
+        BulletDialog(
             title = stringResource(R.string.clear_finished_title),
-            message = stringResource(R.string.clear_finished_msg),
+            bullets = listOf(
+                Bullet(stringResource(R.string.b_clear_records, jobs.count { it.isFinished })),
+                Bullet(stringResource(R.string.b_files_kept))
+            ),
             confirmText = stringResource(R.string.clear_action),
             onConfirm = {
                 viewModel.clearFinished()
@@ -208,6 +297,19 @@ fun ConvertListScreen(
             onDismiss = { confirmClear = false }
         )
     }
+}
+
+/** 横向可滚动的筛选标签行 */
+@Composable
+private fun PillRow(content: @Composable () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = ScreenHorizontalPadding, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) { content() }
 }
 
 private fun sortConverted(list: List<ConvertedVideo>, key: SortKey): List<ConvertedVideo> = when (key) {
@@ -337,9 +439,16 @@ private fun ProgressTab(
             SelectActionBar(
                 selectedCount = selectedIds.size,
                 totalCount = jobs.size,
-                onSelectAll = { viewModel.selectAllJobs() },
+                // 全选当前筛选下可见的任务
+                onSelectAll = { viewModel.setSelectedJobs(jobs.map { it.id }.toSet()) },
                 onDeselectAll = { viewModel.deselectAllJobs() },
                 onDeleteSelected = { deleteIds = selectedIds },
+                retryableCount = jobs.count { it.id in selectedIds && (it.state == JobState.FAILED || it.state == JobState.CANCELLED) },
+                onRetrySelected = {
+                    viewModel.retryJobs(jobs.filter {
+                        it.id in selectedIds && (it.state == JobState.FAILED || it.state == JobState.CANCELLED)
+                    }.map { it.id })
+                },
                 onExit = { viewModel.exitSelectMode() }
             )
         }
@@ -426,9 +535,13 @@ private fun ProgressTab(
 
     pendingFileDelete?.let { (job, withRecord) ->
         val name = viewModel.outputInfo(job)?.displayName ?: job.videoInfo.displayName
-        ConfirmDialog(
+        BulletDialog(
             title = stringResource(if (withRecord) R.string.action_delete_both else R.string.delete_file_title),
-            message = stringResource(if (withRecord) R.string.delete_both_msg else R.string.delete_file_msg, name),
+            bullets = listOfNotNull(
+                Bullet(stringResource(R.string.b_delete_target, name)),
+                Bullet(stringResource(if (withRecord) R.string.b_record_too else R.string.b_record_kept)),
+                Bullet(stringResource(R.string.b_irreversible))
+            ),
             confirmText = stringResource(R.string.delete),
             danger = true,
             onConfirm = {
@@ -442,10 +555,21 @@ private fun ProgressTab(
 
     deleteIds?.let { ids ->
         var alsoFiles by remember { mutableStateOf(false) }
-        AlertDialog(
-            onDismissRequest = { deleteIds = null },
-            title = { Text(stringResource(R.string.delete_jobs_title, ids.size), fontWeight = FontWeight.Bold, color = PurpleDark) },
-            text = {
+        BulletDialog(
+            title = stringResource(R.string.delete_jobs_title, ids.size),
+            bullets = listOf(
+                Bullet(stringResource(R.string.b_delete_records, ids.size)),
+                Bullet(stringResource(if (alsoFiles) R.string.b_files_deleted_too else R.string.b_files_kept))
+            ),
+            confirmText = stringResource(R.string.delete),
+            danger = true,
+            onConfirm = {
+                if (alsoFiles) viewModel.removeJobsAndFiles(ids) else ids.forEach { viewModel.removeJob(it) }
+                viewModel.exitSelectMode()
+                deleteIds = null
+            },
+            onDismiss = { deleteIds = null },
+            extra = {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -460,23 +584,12 @@ private fun ProgressTab(
                     )
                     Text(stringResource(R.string.delete_jobs_also_files), fontSize = 14.sp, color = PurpleDark)
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (alsoFiles) viewModel.removeJobsAndFiles(ids) else ids.forEach { viewModel.removeJob(it) }
-                    viewModel.exitSelectMode()
-                    deleteIds = null
-                }) { Text(stringResource(R.string.delete), color = ErrorRed, fontWeight = FontWeight.SemiBold) }
-            },
-            dismissButton = {
-                TextButton(onClick = { deleteIds = null }) { Text(stringResource(R.string.cancel), color = PurpleDark) }
-            },
-            containerColor = CardSurface,
-            shape = RoundedCornerShape(20.dp)
+            }
         )
     }
 }
 
+/** 「转换进度」多选操作栏（两行）：数量 / 全选 / 退出；重试 / 删除 */
 @Composable
 private fun SelectActionBar(
     selectedCount: Int,
@@ -484,35 +597,53 @@ private fun SelectActionBar(
     onSelectAll: () -> Unit,
     onDeselectAll: () -> Unit,
     onDeleteSelected: () -> Unit,
+    retryableCount: Int,
+    onRetrySelected: () -> Unit,
     onExit: () -> Unit
 ) {
-    Surface(
-        color = PurplePrimary.copy(alpha = 0.10f),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                stringResource(R.string.selected_count, selectedCount, totalCount),
-                color = PurpleDark,
-                fontWeight = FontWeight.Medium,
-                fontSize = 13.sp
-            )
+    Surface(color = PurplePrimary.copy(alpha = 0.10f), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.selected_count, selectedCount, totalCount),
+                    color = PurpleDark, fontWeight = FontWeight.Medium, fontSize = 13.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                )
                 val allSelected = totalCount > 0 && selectedCount >= totalCount
                 TextButton(onClick = { if (allSelected) onDeselectAll() else onSelectAll() }) {
                     Text(stringResource(if (allSelected) R.string.deselect_all else R.string.select_all), color = PurplePrimary, fontSize = 13.sp)
                 }
-                TextButton(onClick = onDeleteSelected, enabled = selectedCount > 0) {
-                    Text(stringResource(R.string.delete_selected), color = if (selectedCount > 0) ErrorRed else Color.Gray, fontSize = 13.sp)
-                }
                 TextButton(onClick = onExit) {
                     Text(stringResource(R.string.exit), color = PurpleDark, fontSize = 13.sp)
+                }
+            }
+            if (selectedCount > 0) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 6.dp)) {
+                    // 失败 / 取消的任务可批量重新转换
+                    if (retryableCount > 0) {
+                        Button(
+                            onClick = onRetrySelected,
+                            colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                            shape = RoundedCornerShape(16.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.Replay, null, tint = OnPrimary, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(stringResource(R.string.retry_n, retryableCount), color = OnPrimary, fontSize = 13.sp, maxLines = 1)
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = onDeleteSelected,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, ErrorRed.copy(alpha = 0.6f)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.Delete, null, tint = ErrorRed, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(stringResource(R.string.delete_n, selectedCount), color = ErrorRed, fontSize = 13.sp, maxLines = 1)
+                    }
                 }
             }
         }
@@ -738,130 +869,171 @@ private fun DialogActionRow(
     }
 }
 
-@Composable
-private fun ConfirmDialog(
-    title: String,
-    message: String,
-    confirmText: String,
-    danger: Boolean = false,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title, fontWeight = FontWeight.Bold, color = PurpleDark) },
-        text = { Text(message, fontSize = 14.sp, color = PurpleDark, lineHeight = 20.sp) },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(confirmText, color = if (danger) ErrorRed else PurplePrimary, fontWeight = FontWeight.SemiBold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel), color = PurpleDark) }
-        },
-        containerColor = CardSurface,
-        shape = RoundedCornerShape(20.dp)
-    )
-}
-
 // ============== Tab 2: 已转视频 ==============
 
 @Composable
 private fun ConvertedVideosTab(
     items: List<ConvertedVideo>,
+    allItems: List<ConvertedVideo>,
+    sourceFilter: SourceFilter,
+    onSourceFilter: (SourceFilter) -> Unit,
     loading: Boolean,
     viewModel: ConvertViewModel,
     onPlay: (VideoInfo) -> Unit,
     listState: LazyListState,
     lastViewedUri: String?
 ) {
-    var pendingDelete by remember { mutableStateOf<ConvertedVideo?>(null) }
+    val isSelectMode by viewModel.convertedSelectMode.collectAsState()
+    val selected by viewModel.selectedConverted.collectAsState()
+    // 删除确认：产物文件（单个 / 批量）、原视频（单个 / 批量）、反向旋转
+    var pendingOutputs by remember { mutableStateOf<List<ConvertedVideo>?>(null) }
+    var pendingOriginals by remember { mutableStateOf<List<ConvertedVideo>?>(null) }
     var pendingReverse by remember { mutableStateOf<ConvertedVideo?>(null) }
-    var pendingDeleteOriginal by remember { mutableStateOf<ConvertedVideo?>(null) }
 
-    when {
-        items.isEmpty() && loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = PurplePrimary)
+    fun keyOf(item: ConvertedVideo) = item.video.uri.toString()
+    val sourceCounts = remember(allItems) { SourceFilter.values().associateWith { f -> allItems.count { f.matches(it) } } }
+    OnFilterEmptied(sourceFilter, sourceCounts[sourceFilter] ?: 0) {
+        if (sourceFilter != SourceFilter.ALL) onSourceFilter(SourceFilter.ALL)
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        PillRow {
+            SourceFilter.values().forEach { f ->
+                FilterPill(
+                    text = stringResource(f.labelRes) + " ${sourceCounts[f] ?: 0}",
+                    selected = f == sourceFilter,
+                    onClick = { onSourceFilter(f) }
+                )
+            }
         }
-        items.isEmpty() -> EmptyState(
-            icon = Icons.Filled.VideoLibrary,
-            title = stringResource(R.string.no_converted),
-            subtitle = stringResource(R.string.no_converted_desc)
-        )
-        else -> Box(Modifier.fillMaxSize()) {
-            LazyColumn(
-                state = listState,
-                contentPadding = PaddingValues(
-                    start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, top = 8.dp, bottom = 88.dp
+        // 原视频仍在的产物：汇总可释放的空间，一键删除全部原视频
+        // 多个产物可能来自同一个原视频：数量与大小都按原视频去重，与删除确认框一致
+        val withSource = remember(items) { items.filter { it.original != null } }
+        val sourceFiles = remember(withSource) { withSource.mapNotNull { it.original }.distinctBy { it.uri } }
+        if (withSource.isNotEmpty() && !isSelectMode) {
+            FreeSpaceBanner(
+                text = stringResource(
+                    R.string.banner_sources, sourceFiles.size,
+                    formatSize(sourceFiles.sumOf { it.size })
                 ),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(items, key = { it.video.uri.toString() }) { item ->
-                    ConvertedVideoCard(
-                        item = item,
-                        onPlay = { onPlay(item.video) },
-                        onDelete = { pendingDelete = item },
-                        onReverse = { pendingReverse = item },
-                        onDeleteOriginal = { pendingDeleteOriginal = item }
-                    )
-                }
-            }
-            val lastViewedIndex = remember(items, lastViewedUri) {
-                lastViewedUri?.let { uri -> items.indexOfFirst { it.video.uri.toString() == uri } }
-            }
-            ListJumpButtons(
-                listState = listState,
-                lastViewedIndex = lastViewedIndex,
-                lastViewedKey = lastViewedUri,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)
+                actionText = stringResource(R.string.delete_all),
+                onAction = { pendingOriginals = withSource },
+                modifier = Modifier.padding(start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, bottom = 6.dp)
             )
+        }
+        if (isSelectMode) {
+            val chosen = items.filter { keyOf(it) in selected }
+            ConvertedSelectBar(
+                selectedCount = chosen.size,
+                totalCount = items.size,
+                originalsCount = chosen.mapNotNull { it.original?.uri }.distinct().size,
+                onSelectAll = { viewModel.setSelectedConverted(items.map { keyOf(it) }.toSet()) },
+                onDeselectAll = { viewModel.setSelectedConverted(emptySet()) },
+                onDeleteOriginals = { pendingOriginals = chosen.filter { it.original != null } },
+                onDeleteFiles = { pendingOutputs = chosen },
+                onExit = { viewModel.exitConvertedSelectMode() }
+            )
+        }
+
+        when {
+            items.isEmpty() && loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = PurplePrimary)
+            }
+            items.isEmpty() -> EmptyState(
+                icon = Icons.Filled.VideoLibrary,
+                title = stringResource(R.string.no_converted),
+                subtitle = stringResource(R.string.no_converted_desc)
+            )
+            else -> Box(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(
+                        start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, top = 4.dp, bottom = 88.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(items, key = { keyOf(it) }) { item ->
+                        ConvertedVideoCard(
+                            item = item,
+                            isSelectMode = isSelectMode,
+                            isSelected = keyOf(item) in selected,
+                            onClick = {
+                                if (isSelectMode) viewModel.toggleConverted(keyOf(item)) else onPlay(item.video)
+                            },
+                            onLongClick = {
+                                if (isSelectMode) viewModel.toggleConverted(keyOf(item))
+                                else viewModel.enterConvertedSelectMode(keyOf(item))
+                            },
+                            onDelete = { pendingOutputs = listOf(item) },
+                            onReverse = { pendingReverse = item },
+                            onDeleteOriginal = { pendingOriginals = listOf(item) }
+                        )
+                    }
+                }
+                val lastViewedIndex = remember(items, lastViewedUri) {
+                    lastViewedUri?.let { uri -> items.indexOfFirst { it.video.uri.toString() == uri } }
+                }
+                ListJumpButtons(
+                    listState = listState,
+                    lastViewedIndex = lastViewedIndex,
+                    lastViewedKey = lastViewedUri,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)
+                )
+            }
         }
     }
 
-    pendingDeleteOriginal?.let { item ->
-        val candidate = item.original?.let { ConvertEngine.DeleteCandidate(it, listOf(item.video.toFileRef())) }
-        if (candidate == null) {
-            pendingDeleteOriginal = null
+    pendingOutputs?.let { list ->
+        // 原视频已不在的产物是仅存的副本：在确认框里醒目提示
+        val onlyCopies = list.count { item ->
+            item.original == null && viewModel.engine.outputLinks.linkOf(item.video.uri, item.video.path) != null
+        }
+        DeleteOutputsDialog(
+            names = list.map { it.video.displayName },
+            totalBytes = list.sumOf { it.video.size },
+            onlyCopies = onlyCopies,
+            onConfirm = {
+                viewModel.deleteOutputs(list)
+                pendingOutputs = null
+            },
+            onDismiss = { pendingOutputs = null }
+        )
+    }
+    pendingOriginals?.let { list ->
+        val candidates = list.mapNotNull { item ->
+            item.original?.let { ConvertEngine.DeleteCandidate(it, listOf(item.video.toFileRef())) }
+        }
+        if (candidates.isEmpty()) {
+            pendingOriginals = null
         } else {
             DeleteOriginalDialog(
-                candidates = listOf(candidate),
+                candidates = candidates,
                 onConfirm = {
-                    evictThumbnail(candidate.original.uri)
-                    viewModel.deleteOriginals(listOf(candidate))
-                    pendingDeleteOriginal = null
+                    candidates.forEach { evictThumbnail(it.original.uri) }
+                    viewModel.deleteOriginals(candidates)
+                    viewModel.exitConvertedSelectMode()
+                    pendingOriginals = null
                 },
-                onDismiss = { pendingDeleteOriginal = null }
+                onDismiss = { pendingOriginals = null }
             )
         }
-    }
-
-    pendingDelete?.let { item ->
-        // 原视频已删除（对应关系还在、原视频却不在了）：这是仅存的副本，加重提示
-        val onlyCopy = item.original == null &&
-            viewModel.engine.outputLinks.linkOf(item.video.uri, item.video.path) != null
-        ConfirmDialog(
-            title = stringResource(R.string.delete_file_title),
-            message = stringResource(R.string.delete_file_msg, item.video.displayName) +
-                if (onlyCopy) "\n\n" + stringResource(R.string.delete_file_only_copy) else "",
-            confirmText = stringResource(R.string.delete),
-            danger = true,
-            onConfirm = {
-                evictThumbnail(item.video.uri)
-                viewModel.deleteConverted(item)
-                pendingDelete = null
-            },
-            onDismiss = { pendingDelete = null }
-        )
     }
     pendingReverse?.let { item ->
         val degrees = item.job?.degrees
-        ConfirmDialog(
+        BulletDialog(
             title = stringResource(R.string.reverse_title),
-            message = if (degrees != null) {
-                stringResource(R.string.reverse_msg, directionLabel(degrees), directionLabel((360 - degrees) % 360))
+            bullets = if (degrees != null) {
+                listOf(
+                    Bullet(stringResource(R.string.b_current_dir, directionLabel(degrees))),
+                    Bullet(stringResource(R.string.b_new_dir, directionLabel((360 - degrees) % 360))),
+                    Bullet(stringResource(R.string.b_reverse_from_source))
+                )
             } else {
-                stringResource(R.string.reverse_msg_file)
+                listOf(
+                    Bullet(stringResource(R.string.b_reverse_on_file)),
+                    Bullet(stringResource(R.string.b_replace_this))
+                )
             },
             confirmText = stringResource(R.string.start),
             onConfirm = {
@@ -874,10 +1046,74 @@ private fun ConvertedVideosTab(
     }
 }
 
+/** 「已转视频」多选操作栏：第一行数量 / 全选 / 退出，第二行删除原视频 / 删除文件 */
+@Composable
+private fun ConvertedSelectBar(
+    selectedCount: Int,
+    totalCount: Int,
+    originalsCount: Int,
+    onSelectAll: () -> Unit,
+    onDeselectAll: () -> Unit,
+    onDeleteOriginals: () -> Unit,
+    onDeleteFiles: () -> Unit,
+    onExit: () -> Unit
+) {
+    Surface(color = PurplePrimary.copy(alpha = 0.10f), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.selected_count, selectedCount, totalCount),
+                    color = PurpleDark, fontWeight = FontWeight.Medium, fontSize = 13.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                )
+                val allSelected = totalCount > 0 && selectedCount >= totalCount
+                TextButton(onClick = { if (allSelected) onDeselectAll() else onSelectAll() }) {
+                    Text(stringResource(if (allSelected) R.string.deselect_all else R.string.select_all), color = PurplePrimary, fontSize = 13.sp)
+                }
+                TextButton(onClick = onExit) {
+                    Text(stringResource(R.string.exit), color = PurpleDark, fontSize = 13.sp)
+                }
+            }
+            if (selectedCount > 0) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 6.dp)) {
+                    if (originalsCount > 0) {
+                        Button(
+                            onClick = onDeleteOriginals,
+                            colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
+                            shape = RoundedCornerShape(16.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.DeleteSweep, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(stringResource(R.string.delete_originals_n, originalsCount), color = Color.White, fontSize = 13.sp, maxLines = 1)
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = onDeleteFiles,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, ErrorRed.copy(alpha = 0.6f)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.Delete, null, tint = ErrorRed, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(stringResource(R.string.delete_files_n, selectedCount), color = ErrorRed, fontSize = 13.sp, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConvertedVideoCard(
     item: ConvertedVideo,
-    onPlay: () -> Unit,
+    isSelectMode: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
     onDelete: () -> Unit,
     onReverse: () -> Unit,
     onDeleteOriginal: () -> Unit
@@ -885,14 +1121,16 @@ private fun ConvertedVideoCard(
     val video = item.video
     Card(
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = CardSurface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) lerp(CardSurface, PurplePrimary, 0.25f) else CardSurface
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onPlay)
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -906,7 +1144,9 @@ private fun ConvertedVideoCard(
                 VideoThumbnail(uri = video.uri, modifier = Modifier.fillMaxSize())
                 ConvertBadge(
                     mark = ConvertMark.OUTPUT,
-                    degrees = item.job?.degrees,
+                    // 文件名记录的是相对原视频的净角度（对产物再旋转时任务角度≠净角度）；
+                    // 之前版本转换、没有任务记录的产物也能读出
+                    degrees = VideoUtils.degreesInName(video.displayName) ?: item.job?.degrees,
                     modifier = Modifier.align(Alignment.TopStart)
                 )
                 OrientationBadge(video, Modifier.align(Alignment.BottomEnd))
@@ -934,25 +1174,43 @@ private fun ConvertedVideoCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                // 原视频是否还在：一眼看出能否删除原视频释放空间
+                Text(
+                    item.original?.let { stringResource(R.string.source_at, it.name) } ?: stringResource(R.string.source_missing),
+                    fontSize = 11.sp,
+                    color = if (item.original != null) ConvertedGreen else Color.Gray,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (isSelectMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onClick() },
+                    colors = CheckboxDefaults.colors(checkedColor = PurplePrimary, checkmarkColor = OnPrimary)
+                )
             }
         }
-        Divider(color = PurpleLight, thickness = 1.dp)
-        // 底部操作区：删除文件 | 反向旋转 | 删除原视频（原视频仍在设备上时）
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val stacked = item.original != null
-            CardAction(Icons.Filled.Delete, stringResource(R.string.delete_file), ErrorRed, onDelete, Modifier.weight(1f), stacked)
-            ActionDivider()
-            CardAction(Icons.Filled.Rotate90DegreesCcw, stringResource(R.string.reverse_title), PurpleDark, onReverse, Modifier.weight(1f), stacked)
-            if (stacked) {
+        if (!isSelectMode) {
+            Divider(color = PurpleLight, thickness = 1.dp)
+            // 底部操作区：删除文件 | 反向旋转 | 删除原视频（原视频仍在设备上时）
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val stacked = item.original != null
+                CardAction(Icons.Filled.Delete, stringResource(R.string.delete_file), ErrorRed, onDelete, Modifier.weight(1f), stacked)
                 ActionDivider()
-                CardAction(Icons.Filled.DeleteSweep, stringResource(R.string.delete_original), ErrorRed, onDeleteOriginal, Modifier.weight(1f), true)
+                CardAction(Icons.Filled.Rotate90DegreesCcw, stringResource(R.string.reverse_title), PurpleDark, onReverse, Modifier.weight(1f), stacked)
+                if (stacked) {
+                    ActionDivider()
+                    CardAction(Icons.Filled.DeleteSweep, stringResource(R.string.delete_original), ErrorRed, onDeleteOriginal, Modifier.weight(1f), true)
+                }
             }
         }
     }
 }
+
 
 @Composable
 private fun ActionDivider() {

@@ -1,5 +1,10 @@
 package com.videorotator
 
+import com.videorotator.ui.components.OnFilterEmptied
+import com.videorotator.viewmodel.ConvertedKind
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.produceState
 import com.videorotator.ui.components.evictThumbnail
 import com.videorotator.ui.components.formatSize
 import com.videorotator.ui.components.DeleteOriginalDialog
@@ -303,6 +308,9 @@ fun MainScreen(
     val activeJobs by convertViewModel.activeCount.collectAsState()
     val fbState by fbViewModel.state.collectAsState()
     val jobsSelectMode by convertViewModel.isSelectMode.collectAsState()
+    val convertedSelectMode by convertViewModel.convertedSelectMode.collectAsState()
+    // 有读取权限后识别之前版本转换的视频（补建原视频对应关系），视频列表标识随之更新
+    LaunchedEffect(fbState.hasPermission) { if (fbState.hasPermission) convertViewModel.refreshConverted() }
 
     // 队列跑完时在应用内提示结果（应用在后台时由通知提示），可直接播放 / 重试 / 查看
     val snackbarHostState = remember { SnackbarHostState() }
@@ -356,13 +364,17 @@ fun MainScreen(
         }
     }
     LaunchedEffect(convertViewModel) {
-        convertViewModel.originalsDeleted.collect { r ->
+        convertViewModel.filesDeleted.collect { r ->
+            val originals = r.kind == ConvertEngine.DeleteKind.ORIGINALS
             val message = when {
-                r.count == 0 -> context.getString(R.string.originals_none_deleted)
+                r.count == 0 -> context.getString(if (originals) R.string.originals_none_deleted else R.string.files_none_deleted)
                 r.skipped > 0 -> context.getString(
-                    R.string.originals_deleted_skipped, r.count, formatSize(r.freedBytes), r.skipped
+                    if (originals) R.string.originals_deleted_skipped else R.string.files_deleted_skipped,
+                    r.count, formatSize(r.freedBytes), r.skipped
                 )
-                else -> context.getString(R.string.originals_deleted, r.count, formatSize(r.freedBytes))
+                else -> context.getString(
+                    if (originals) R.string.originals_deleted else R.string.files_deleted, r.count, formatSize(r.freedBytes)
+                )
             }
             snackbarHostState.showSnackbar(message, withDismissAction = true)
         }
@@ -392,13 +404,13 @@ fun MainScreen(
     BackHandler(enabled = playing != null && converting == null) {
         playingVideo = null
     }
-    BackHandler(enabled = playing == null && converting == null && (fbState.isSelectMode || jobsSelectMode)) {
+    val anySelectMode = fbState.isSelectMode || jobsSelectMode || convertedSelectMode
+    BackHandler(enabled = playing == null && converting == null && anySelectMode) {
         fbViewModel.exitSelectMode()
         convertViewModel.exitSelectMode()
+        convertViewModel.exitConvertedSelectMode()
     }
-    BackHandler(enabled = playing == null && converting == null && selectedTab != 0 &&
-        !fbState.isSelectMode && !jobsSelectMode
-    ) {
+    BackHandler(enabled = playing == null && converting == null && selectedTab != 0 && !anySelectMode) {
         selectedTab = 0
     }
 
@@ -570,12 +582,28 @@ fun FileBrowserTab(
 
     // 标识 / 去重 / 筛选分步记忆：标识只在列表或任务结果变化时计算一次，切换筛选只做过滤；
     // 任务流只在成功产物 / 队列内容变化时发射，转换进度不会触发重算
-    val marked = remember(state.videos, links, activeSourceUris) {
-        VideoMarks.mark(state.videos, links, activeSourceUris)
+    // 标识计算放到后台线程：视频多时不卡界面；首次组合同步算一次，避免闪出「没有视频」
+    val marked by produceState(
+        initialValue = remember { VideoMarks.mark(state.videos, links, activeSourceUris) },
+        state.videos, links, activeSourceUris
+    ) {
+        value = withContext(Dispatchers.Default) { VideoMarks.mark(state.videos, links, activeSourceUris) }
     }
     // 筛选数量与去重开关保持一致
     val all = remember(marked, state.dedupe) { VideoMarks.dedupe(marked, state.dedupe) }
-    val visible = remember(all, state.filter) { VideoMarks.filter(all, state.filter) }
+    val visible = remember(all, state.filter, state.kind) { VideoMarks.filter(all, state.filter, state.kind) }
+    val kindCounts = remember(all) {
+        mapOf(
+            ConvertedKind.SOURCES to all.count { it.mark == ConvertMark.SOURCE_CONVERTED },
+            ConvertedKind.OUTPUTS to all.count { it.mark == ConvertMark.OUTPUT }
+        )
+    }
+    // 「源文件 / 转换产物」被全部删除后自动取消该筛选，避免停留在空列表
+    state.kind?.let { kind ->
+        OnFilterEmptied(kind, kindCounts[kind] ?: 0) {
+            if (!state.isLoading && state.kind == kind) fbViewModel.setKind(kind)
+        }
+    }
     val counts = remember(all) {
         val converted = all.count { with(VideoMarks) { it.mark.isConverted } }
         mapOf(
@@ -594,6 +622,13 @@ fun FileBrowserTab(
         .distinctBy { it.original.uri }
     val selectedDeletable = remember(all, state.selectedUris) {
         candidatesOf(all.filter { it.video.uri.toString() in state.selectedUris })
+    }
+    val selectedConvertible = remember(all, state.selectedUris) {
+        all.count { it.video.uri.toString() in state.selectedUris && it.mark == ConvertMark.NONE }
+    }
+    // 「源文件」筛选下：当前列出的原视频可一键全部删除
+    val shownDeletable = remember(visible, state.kind) {
+        if (state.kind == ConvertedKind.SOURCES) candidatesOf(visible) else emptyList()
     }
     pendingDeleteOriginals?.let { candidates ->
         DeleteOriginalDialog(
@@ -658,6 +693,11 @@ fun FileBrowserTab(
         lastViewedUri = lastViewedUri,
         onDeleteOriginal = { item -> pendingDeleteOriginals = candidatesOf(listOf(item)) },
         selectedDeletableCount = selectedDeletable.size,
-        onDeleteOriginalsSelected = { pendingDeleteOriginals = selectedDeletable }
+        onDeleteOriginalsSelected = { pendingDeleteOriginals = selectedDeletable },
+        selectedConvertibleCount = selectedConvertible,
+        kindCounts = kindCounts,
+        onKindSelected = { fbViewModel.setKind(it) },
+        deletableSummary = shownDeletable.takeIf { it.isNotEmpty() }?.let { list -> list.size to list.sumOf { it.original.size } },
+        onDeleteAllShown = { pendingDeleteOriginals = shownDeletable }
     )
 }

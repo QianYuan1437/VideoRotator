@@ -28,7 +28,7 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
     val outputRevision = engine.outputRevision
     val links = engine.links
     val deleteConsent = engine.deleteConsent
-    val originalsDeleted = engine.originalsDeleted
+    val filesDeleted = engine.filesDeleted
 
     private val _selectedJobIds = MutableStateFlow<Set<String>>(emptySet())
     val selectedJobIds: StateFlow<Set<String>> = _selectedJobIds.asStateFlow()
@@ -53,6 +53,36 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
     fun reverseConverted(item: ConvertedVideo) = engine.reverseConverted(item)
     fun deleteOriginals(candidates: List<ConvertEngine.DeleteCandidate>) = engine.deleteOriginals(candidates)
     fun onDeleteConsentResult(granted: Boolean) = engine.onDeleteConsentResult(granted)
+    fun deleteOutputs(items: List<ConvertedVideo>) {
+        engine.deleteOutputs(items)
+        exitConvertedSelectMode()
+    }
+
+    // ---- 「已转视频」多选 ----
+
+    private val _convertedSelectMode = MutableStateFlow(false)
+    val convertedSelectMode: StateFlow<Boolean> = _convertedSelectMode.asStateFlow()
+
+    private val _selectedConverted = MutableStateFlow<Set<String>>(emptySet())
+    val selectedConverted: StateFlow<Set<String>> = _selectedConverted.asStateFlow()
+
+    fun enterConvertedSelectMode(initial: String? = null) {
+        _convertedSelectMode.value = true
+        _selectedConverted.value = setOfNotNull(initial)
+    }
+
+    fun exitConvertedSelectMode() {
+        _convertedSelectMode.value = false
+        _selectedConverted.value = emptySet()
+    }
+
+    fun toggleConverted(key: String) {
+        _selectedConverted.update { if (key in it) it - key else it + key }
+    }
+
+    fun setSelectedConverted(keys: Set<String>) {
+        _selectedConverted.value = keys
+    }
 
     fun removeJob(id: String) {
         engine.removeJob(id)
@@ -90,6 +120,15 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectAllJobs() {
         _selectedJobIds.value = jobs.value.map { it.id }.toSet()
+    }
+
+    fun setSelectedJobs(ids: Set<String>) {
+        _selectedJobIds.value = ids
+    }
+
+    fun retryJobs(ids: List<String>) {
+        ids.forEach { engine.retryJob(it) }
+        exitSelectMode()
     }
 
     fun deselectAllJobs() {

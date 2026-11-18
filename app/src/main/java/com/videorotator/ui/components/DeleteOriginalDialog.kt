@@ -1,22 +1,10 @@
 package com.videorotator.ui.components
 
 import android.content.Context
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.videorotator.R
-import com.videorotator.ui.theme.PurpleDark
 import com.videorotator.utils.FileRef
 import com.videorotator.utils.VideoUtils
 import com.videorotator.viewmodel.ConvertEngine
@@ -32,9 +20,7 @@ fun formatSize(bytes: Long): String {
     return if (mb >= 1024) "%.2f GB".format(mb / 1024) else "%.1f MB".format(mb)
 }
 
-/**
- * 删除原视频确认：说明释放的空间，产物只在私有目录时提醒卸载会一并删除。
- */
+/** 删除原视频确认：删什么、释放多少、保留什么，分点列出 */
 @Composable
 fun DeleteOriginalDialog(
     candidates: List<ConvertEngine.DeleteCandidate>,
@@ -43,36 +29,52 @@ fun DeleteOriginalDialog(
 ) {
     val context = LocalContext.current
     val originals: List<FileRef> = candidates.map { it.original }.distinctBy { it.uri }
-    val size = formatSize(originals.sumOf { it.size })
-    val privateOnly = candidates.any { it.outputsOnlyPrivate(context) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.delete_original), fontWeight = FontWeight.Bold, color = PurpleDark) },
-        text = {
-            Column {
-                Text(
-                    if (originals.size == 1) {
-                        stringResource(R.string.delete_original_msg_one, originals[0].name, size)
-                    } else {
-                        stringResource(R.string.delete_original_msg_many, originals.size, size)
-                    },
-                    fontSize = 14.sp, color = PurpleDark, lineHeight = 20.sp
-                )
-                if (privateOnly) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.delete_original_private_warn), fontSize = 13.sp, color = DialogRed, lineHeight = 19.sp)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(stringResource(R.string.delete), color = DialogRed, fontWeight = FontWeight.SemiBold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel), color = PurpleDark) }
-        }
+    val what = if (originals.size == 1) originals[0].name else stringResource(R.string.b_n_originals, originals.size)
+    val bullets = buildList {
+        add(Bullet(stringResource(R.string.b_delete_target, what)))
+        add(Bullet(stringResource(R.string.b_free_space, formatSize(originals.sumOf { it.size }))))
+        add(Bullet(stringResource(R.string.b_keep_converted)))
+        add(Bullet(stringResource(R.string.b_not_kept_tracks)))
+        if (candidates.any { it.outputsOnlyPrivate(context) }) add(Bullet(stringResource(R.string.b_private_warn), warn = true))
+    }
+    BulletDialog(
+        title = stringResource(R.string.delete_original),
+        bullets = bullets,
+        confirmText = stringResource(R.string.delete),
+        danger = true,
+        onConfirm = onConfirm,
+        onDismiss = onDismiss
     )
 }
 
-private val DialogRed = Color(0xFFD32F2F)
+/**
+ * 删除产物文件确认。[onlyCopies]：其中原视频已不在设备上的数量（删除后无法找回）。
+ */
+@Composable
+fun DeleteOutputsDialog(
+    names: List<String>,
+    totalBytes: Long,
+    onlyCopies: Int,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val what = if (names.size == 1) names[0] else stringResource(R.string.b_n_files, names.size)
+    val bullets = buildList {
+        add(Bullet(stringResource(R.string.b_delete_target, what)))
+        add(Bullet(stringResource(R.string.b_free_space, formatSize(totalBytes))))
+        when {
+            onlyCopies == 0 -> add(Bullet(stringResource(R.string.b_original_kept)))
+            names.size == 1 -> add(Bullet(stringResource(R.string.delete_file_only_copy), warn = true))
+            else -> add(Bullet(stringResource(R.string.b_only_copies, onlyCopies), warn = true))
+        }
+        add(Bullet(stringResource(R.string.b_irreversible)))
+    }
+    BulletDialog(
+        title = stringResource(R.string.delete_file_title),
+        bullets = bullets,
+        confirmText = stringResource(R.string.delete),
+        danger = true,
+        onConfirm = onConfirm,
+        onDismiss = onDismiss
+    )
+}

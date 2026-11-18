@@ -1,5 +1,6 @@
 package com.videorotator.utils
 
+import com.videorotator.viewmodel.ConvertedKind
 import com.videorotator.viewmodel.VideoFilter
 import kotlin.math.abs
 
@@ -131,9 +132,16 @@ object VideoMarks {
             .distinctBy { Triple(it.video.displayName.lowercase(), it.video.size, it.video.duration / 1000) }
     }
 
-    fun filter(marked: List<MarkedVideo>, filter: VideoFilter): List<MarkedVideo> = when (filter) {
-        VideoFilter.ALL -> marked
-        VideoFilter.UNCONVERTED -> marked.filter { !it.mark.isConverted }
-        VideoFilter.CONVERTED -> marked.filter { it.mark.isConverted }
+    fun filter(marked: List<MarkedVideo>, filter: VideoFilter, kind: ConvertedKind? = null): List<MarkedVideo> {
+        val byFilter = when (filter) {
+            VideoFilter.ALL -> marked
+            VideoFilter.UNCONVERTED -> marked.filter { !it.mark.isConverted }
+            VideoFilter.CONVERTED -> marked.filter { it.mark.isConverted }
+        }
+        return when (kind) {
+            null -> byFilter
+            ConvertedKind.SOURCES -> byFilter.filter { it.mark == ConvertMark.SOURCE_CONVERTED }
+            ConvertedKind.OUTPUTS -> byFilter.filter { it.mark == ConvertMark.OUTPUT }
+        }
     }
 }
