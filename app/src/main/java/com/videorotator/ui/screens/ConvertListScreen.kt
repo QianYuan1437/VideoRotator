@@ -909,7 +909,8 @@ private fun ConvertedVideosTab(
         // 原视频仍在的产物：汇总可释放的空间，一键删除全部原视频
         // 多个产物可能来自同一个原视频：数量与大小都按原视频去重，与删除确认框一致
         val withSource = remember(items) { items.filter { it.original != null } }
-        val sourceFiles = remember(withSource) { withSource.mapNotNull { it.original }.distinctBy { it.uri } }
+        val sourceFiles = remember(withSource) { withSource.mapNotNull { it.original }.distinctBy { it.fileKey } }
+        val deleting by viewModel.deleting.collectAsState()
         if (withSource.isNotEmpty() && !isSelectMode) {
             FreeSpaceBanner(
                 text = stringResource(
@@ -918,7 +919,8 @@ private fun ConvertedVideosTab(
                 ),
                 actionText = stringResource(R.string.delete_all),
                 onAction = { pendingOriginals = withSource },
-                modifier = Modifier.padding(start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, bottom = 6.dp)
+                modifier = Modifier.padding(start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, bottom = 6.dp),
+                busy = deleting
             )
         }
         if (isSelectMode) {
@@ -926,7 +928,7 @@ private fun ConvertedVideosTab(
             ConvertedSelectBar(
                 selectedCount = chosen.size,
                 totalCount = items.size,
-                originalsCount = chosen.mapNotNull { it.original?.uri }.distinct().size,
+                originalsCount = chosen.mapNotNull { it.original?.fileKey }.distinct().size,
                 onSelectAll = { viewModel.setSelectedConverted(items.map { keyOf(it) }.toSet()) },
                 onDeselectAll = { viewModel.setSelectedConverted(emptySet()) },
                 onDeleteOriginals = { pendingOriginals = chosen.filter { it.original != null } },

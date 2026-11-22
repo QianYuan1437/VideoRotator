@@ -182,6 +182,9 @@
     <string name="privacy_desc">Read the privacy policy</string>
     <string name="check_update">Check for updates</string>
     <string name="check_update_desc">See the latest release</string>
+    <string name="crash_log">Last crash report</string>
+    <string name="crash_log_desc">Tap to copy the error details for a bug report (cleared after copying)</string>
+    <string name="crash_log_copied">Crash report copied</string>
     <string name="app_tagline">Video rotation helper v%1$s</string>
     <string name="app_version">App version</string>
     <string name="info_app_name">App name</string>

@@ -48,10 +48,7 @@ data class VideoInfo(
         val s = seconds % 60
         return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
     }
-    val sizeText: String get() {
-        val mb = size / (1024.0 * 1024.0)
-        return if (mb >= 1024) "%.2f GB".format(mb / 1024) else "%.1f MB".format(mb)
-    }
+    val sizeText: String get() = VideoUtils.formatSize(size)
 }
 
 /** 一次转换的输出：path 供展示 / 匹配，uri 供播放 / 删除 */
@@ -606,7 +603,8 @@ object VideoUtils {
         }
     } catch (_: Exception) { null }
 
-    private fun findVideoUriByPath(context: Context, path: String): Uri? = try {
+    /** 按文件路径查出当前的媒体库 uri（文件被重新扫描后 _ID 会变，之前记下的 uri 随之失效） */
+    fun findVideoUriByPath(context: Context, path: String): Uri? = try {
         val collection = videoCollection()
         context.contentResolver.query(
             collection, arrayOf(MediaStore.Video.Media._ID),
@@ -615,6 +613,28 @@ object VideoUtils {
             if (c.moveToFirst()) Uri.withAppendedPath(collection, c.getLong(0).toString()) else null
         }
     } catch (_: Exception) { null }
+
+    /**
+     * 能否交给 MediaStore.createDeleteRequest：只接受图片 / 视频 / 音频集合中带具体 _ID 的条目，
+     * 其余（Downloads / Files 集合、SAF 文档等）混进去一个，整批请求都会抛异常。
+     */
+    fun isMediaItemUri(uri: Uri): Boolean {
+        if (uri.authority != MediaStore.AUTHORITY) return false
+        val seg = uri.pathSegments
+        return seg.size >= 4 && seg[seg.size - 3] in setOf("video", "images", "audio") &&
+            seg[seg.size - 2] == "media" && seg.last().toLongOrNull() != null
+    }
+
+    /** 文件大小：不足 1 MB 显示 KB（之前小文件一律显示「0.0 MB」） */
+    fun formatSize(bytes: Long): String {
+        val kb = bytes / 1024.0
+        val mb = kb / 1024.0
+        return when {
+            mb >= 1024 -> "%.2f GB".format(mb / 1024)
+            mb >= 1 -> "%.1f MB".format(mb)
+            else -> "%.0f KB".format(kb.coerceAtLeast(if (bytes > 0) 1.0 else 0.0))
+        }
+    }
 
     /** 删除一个转换产物（文件路径 / MediaStore / SAF 文档均可） */
     fun deleteOutput(context: Context, uri: Uri?, path: String?): Boolean {

@@ -28,6 +28,7 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
     val outputRevision = engine.outputRevision
     val links = engine.links
     val deleteConsent = engine.deleteConsent
+    val deleting = engine.deleting
     val filesDeleted = engine.filesDeleted
 
     private val _selectedJobIds = MutableStateFlow<Set<String>>(emptySet())
@@ -53,6 +54,7 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
     fun reverseConverted(item: ConvertedVideo) = engine.reverseConverted(item)
     fun deleteOriginals(candidates: List<ConvertEngine.DeleteCandidate>) = engine.deleteOriginals(candidates)
     fun onDeleteConsentResult(granted: Boolean) = engine.onDeleteConsentResult(granted)
+    fun onDeleteConsentFailed() = engine.onDeleteConsentFailed()
     fun deleteOutputs(items: List<ConvertedVideo>) {
         engine.deleteOutputs(items)
         exitConvertedSelectMode()

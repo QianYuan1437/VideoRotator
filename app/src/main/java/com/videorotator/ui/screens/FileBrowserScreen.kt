@@ -136,6 +136,8 @@ fun FileBrowserScreen(
     /** 「源文件」筛选下可删除的原视频数量与总大小：显示一键删除提示条 */
     deletableSummary: Pair<Int, Long>? = null,
     onDeleteAllShown: () -> Unit = {},
+    /** 正在删除原视频（等待系统确认等） */
+    deleteBusy: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -186,7 +188,8 @@ fun FileBrowserScreen(
                 text = stringResource(R.string.banner_sources, deletableSummary.first, formatSize(deletableSummary.second)),
                 actionText = stringResource(R.string.delete_all),
                 onAction = onDeleteAllShown,
-                modifier = Modifier.padding(start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, bottom = 8.dp)
+                modifier = Modifier.padding(start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, bottom = 8.dp),
+                busy = deleteBusy
             )
         }
 

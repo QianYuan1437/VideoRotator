@@ -15,10 +15,7 @@ fun ConvertEngine.DeleteCandidate.outputsOnlyPrivate(context: Context): Boolean 
     return outputs.all { it.path?.startsWith(dir) == true }
 }
 
-fun formatSize(bytes: Long): String {
-    val mb = bytes / (1024.0 * 1024.0)
-    return if (mb >= 1024) "%.2f GB".format(mb / 1024) else "%.1f MB".format(mb)
-}
+fun formatSize(bytes: Long): String = VideoUtils.formatSize(bytes)
 
 /** 删除原视频确认：删什么、释放多少、保留什么，分点列出 */
 @Composable
@@ -28,7 +25,7 @@ fun DeleteOriginalDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val originals: List<FileRef> = candidates.map { it.original }.distinctBy { it.uri }
+    val originals: List<FileRef> = candidates.map { it.original }.distinctBy { it.fileKey }
     val what = if (originals.size == 1) originals[0].name else stringResource(R.string.b_n_originals, originals.size)
     val bullets = buildList {
         add(Bullet(stringResource(R.string.b_delete_target, what)))

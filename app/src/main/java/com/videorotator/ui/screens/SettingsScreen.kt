@@ -3,6 +3,7 @@ package com.videorotator.ui.screens
 import com.videorotator.utils.AppLocale
 import androidx.annotation.StringRes
 import com.videorotator.R
+import com.videorotator.utils.CrashLog
 import androidx.compose.ui.res.stringResource
 import android.content.Intent
 import android.net.Uri
@@ -426,6 +427,22 @@ fun SettingsScreen(
                 subtitle = stringResource(R.string.privacy_desc),
                 onClick = { showPrivacyDialog = true }
             )
+            // 上次闪退的记录：复制后清除，便于反馈问题
+            var crashLog by remember { mutableStateOf(CrashLog.read(context)) }
+            crashLog?.let { log ->
+                Divider(color = PurpleLight)
+                SettingsItem(
+                    title = stringResource(R.string.crash_log),
+                    subtitle = stringResource(R.string.crash_log_desc),
+                    onClick = {
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("VideoRotator crash", log))
+                        android.widget.Toast.makeText(context, R.string.crash_log_copied, android.widget.Toast.LENGTH_SHORT).show()
+                        CrashLog.clear(context)
+                        crashLog = null
+                    }
+                )
+            }
             Divider(color = PurpleLight)
             SettingsItem(
                 title = stringResource(R.string.check_update),

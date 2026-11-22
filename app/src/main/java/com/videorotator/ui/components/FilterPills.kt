@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -82,7 +83,9 @@ fun FreeSpaceBanner(
     text: String,
     actionText: String,
     onAction: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 正在删除：按钮显示进度并禁用，避免等待系统确认时重复点击 */
+    busy: Boolean = false
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -106,10 +109,18 @@ fun FreeSpaceBanner(
             Spacer(Modifier.width(8.dp))
             Button(
                 onClick = onAction,
-                colors = ButtonDefaults.buttonColors(containerColor = DangerRed),
+                enabled = !busy,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = DangerRed,
+                    disabledContainerColor = DangerRed.copy(alpha = 0.5f)
+                ),
                 shape = RoundedCornerShape(14.dp),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
             ) {
+                if (busy) {
+                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                }
                 Text(actionText, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
             }
         }

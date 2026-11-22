@@ -15,7 +15,10 @@ data class FileRef(
     val path: String?,
     val name: String,
     val size: Long
-)
+) {
+    /** 同一个文件的标识：媒体库 _ID 会变（同一文件可能先后以不同 uri 被记下），优先按路径 */
+    val fileKey: String get() = path?.takeIf { it.startsWith("/") } ?: uri.toString()
+}
 
 /** 转换产物 → 原视频 的对应关系 */
 data class SourceLink(
@@ -95,11 +98,22 @@ class OutputLinks(context: Context) {
         persist()
     }
 
-    /** 原视频被删除后调用 */
-    fun markSourcesMissing(sourceUris: Set<String>) {
-        if (_links.value.none { it.source.uri.toString() in sourceUris }) return
+    /** 原视频被删除后调用（按 uri 或路径匹配：记录里的 uri 可能是旧的媒体库 _ID） */
+    fun markSourcesMissing(sources: List<FileRef>) {
+        val uris = sources.map { it.uri.toString() }.toSet()
+        val keys = sources.map { it.fileKey }.toSet()
+        fun SourceLink.hit() = source.uri.toString() in uris || source.fileKey in keys
+        if (_links.value.none { it.hit() && !it.sourceMissing }) return
+        _links.update { list -> list.map { if (it.hit()) it.copy(sourceMissing = true) else it } }
+        persist()
+    }
+
+    /** 原视频的媒体库 uri 已变（按路径查到了新的）：更新记录，视频列表的标识与删除都用新 uri */
+    fun updateSourceUri(path: String, fresh: Uri) {
+        val freshStr = fresh.toString()
+        if (_links.value.none { it.source.path == path && it.source.uri.toString() != freshStr }) return
         _links.update { list ->
-            list.map { if (it.source.uri.toString() in sourceUris) it.copy(sourceMissing = true) else it }
+            list.map { if (it.source.path == path) it.copy(source = it.source.copy(uri = fresh)) else it }
         }
         persist()
     }

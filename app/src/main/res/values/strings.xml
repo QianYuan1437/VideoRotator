@@ -183,6 +183,9 @@
     <string name="privacy_desc">查看隐私政策</string>
     <string name="check_update">检查更新</string>
     <string name="check_update_desc">查看最新发布版本</string>
+    <string name="crash_log">上次闪退记录</string>
+    <string name="crash_log_desc">点击复制错误信息，反馈问题时附上即可（复制后清除）</string>
+    <string name="crash_log_copied">已复制闪退记录</string>
     <string name="app_tagline">视频旋转助手 v%1$s</string>
     <string name="app_version">应用版本</string>
     <string name="info_app_name">应用名称</string>

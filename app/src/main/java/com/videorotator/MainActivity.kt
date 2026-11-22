@@ -82,6 +82,7 @@ import com.videorotator.ui.screens.PlayerScreen
 import com.videorotator.ui.screens.SettingsScreen
 import com.videorotator.ui.theme.VideoRotatorTheme
 import com.videorotator.utils.AppPrefs
+import com.videorotator.utils.CrashLog
 import com.videorotator.utils.PermissionUtils
 import com.videorotator.utils.PlayerPrefs
 import com.videorotator.utils.VideoInfo
@@ -182,6 +183,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         super.onCreate(savedInstanceState)
+        CrashLog.install(this)
 
         // 从 SharedPreferences 读取保存的设置
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
@@ -359,7 +361,9 @@ fun MainScreen(
     LaunchedEffect(deleteConsent) {
         deleteConsent?.let { sender ->
             if (convertViewModel.engine.claimDeleteConsent(sender)) {
-                deleteConsentLauncher.launch(IntentSenderRequest.Builder(sender).build())
+                // 系统确认界面弹不出来时按「拒绝」继续，不能让异常带崩应用
+                runCatching { deleteConsentLauncher.launch(IntentSenderRequest.Builder(sender).build()) }
+                    .onFailure { convertViewModel.onDeleteConsentFailed() }
             }
         }
     }
@@ -576,6 +580,7 @@ fun FileBrowserTab(
     val state by fbViewModel.state.collectAsState()
     val links by convertViewModel.links.collectAsState()
     val activeSourceUris by convertViewModel.activeSourceUris.collectAsState()
+    val deleteBusy by convertViewModel.deleting.collectAsState()
     // 产物增删后刷新列表，让新产物出现并打上标识、已删除的文件消失
     val outputRevision by convertViewModel.outputRevision.collectAsState()
     LaunchedEffect(outputRevision) { fbViewModel.syncOutputRevision(outputRevision) }
@@ -619,7 +624,7 @@ fun FileBrowserTab(
     fun candidatesOf(items: List<com.videorotator.utils.MarkedVideo>) = items
         .filter { it.canDeleteOriginal }
         .map { ConvertEngine.DeleteCandidate(it.original!!, it.outputs) }
-        .distinctBy { it.original.uri }
+        .distinctBy { it.original.fileKey }
     val selectedDeletable = remember(all, state.selectedUris) {
         candidatesOf(all.filter { it.video.uri.toString() in state.selectedUris })
     }
@@ -698,6 +703,7 @@ fun FileBrowserTab(
         kindCounts = kindCounts,
         onKindSelected = { fbViewModel.setKind(it) },
         deletableSummary = shownDeletable.takeIf { it.isNotEmpty() }?.let { list -> list.size to list.sumOf { it.original.size } },
-        onDeleteAllShown = { pendingDeleteOriginals = shownDeletable }
+        onDeleteAllShown = { pendingDeleteOriginals = shownDeletable },
+        deleteBusy = deleteBusy
     )
 }
